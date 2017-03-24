@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 15
+VisualStudioVersion = 15.0.26228.4
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{F5034706-568F-408A-B7B3-4D38C6DB8A32}") = "ActiveDirectoryTools", "ActiveDirectoryTools\ActiveDirectoryTools.pssproj", "{63EAA0BE-C4DE-4882-8B6C-BFFAF8A9573B}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{FD72417B-11F3-4326-8CE2-82578253DCE6}"
+	ProjectSection(SolutionItems) = preProject
+		LICENSE = LICENSE
+		README.md = README.md
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{63EAA0BE-C4DE-4882-8B6C-BFFAF8A9573B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{63EAA0BE-C4DE-4882-8B6C-BFFAF8A9573B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{63EAA0BE-C4DE-4882-8B6C-BFFAF8A9573B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{63EAA0BE-C4DE-4882-8B6C-BFFAF8A9573B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
