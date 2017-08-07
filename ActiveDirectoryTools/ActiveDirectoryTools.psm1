@@ -4479,21 +4479,29 @@ Function Get-ADComputerSite {
 		.PARAMETER ComputerName
 			The computer to query the AD site name for. Leave this blank to query the local machine.
 
+		.PARAMETER AsADSite
+			This parameter specifies that the site name returned to DsGetSiteName is supplied to Get-ADReplicationSite and returns a Microsoft.ActiveDirectory.Management.ADReplicationSite instead of a string.
+
 		.EXAMPLE
-			$Site = Get-ADComputerSite
+			$SiteName = Get-ADComputerSite
 
 			Gets the AD site for the local computer. The return value would be Default-First-Site-Name if the computer is in that AD site.
 
 		.EXAMPLE
-			$Site = Get-ADComputerSite -ComputerName myserver01
+			$SiteName = Get-ADComputerSite -ComputerName myserver01
 
 			Gets the AD site for the remote computer myserver01.
+
+		.EXAMPLE
+			[Microsoft.ActiveDirectory.Management.ADReplicationSite]$ReplSite = Get-ADComputerSite -AsADSite
+
+			Gets the AD site the local computer is a member of as an Microsoft.ActiveDirectory.Management.ADReplicationSite object.
 
 		.INPUTS
 			System.String
 
 		.OUTPUTS
-			System.String
+			System.String, Microsoft.ActiveDirectory.Management.ADReplicationSite
 
 		.NOTES
 			AUTHOR: Michael Haken
@@ -4504,16 +4512,26 @@ Function Get-ADComputerSite {
 	Param(
 		[Parameter()]
 		[ValidateNotNull()]
-		[System.String]$ComputerName = [System.String]::Empty
+		[System.String]$ComputerName = [System.String]::Empty,
+
+		[Parameter()]
+		[Switch]$AsADSite
 	)
 
 	Begin {
+		Add-Type -TypeDefinition $script:AdSite
 	}
 
 	Process {
-		Add-Type -TypeDefinition $script:AdSite
+		[System.String]$SiteName = [NetApi32]::DsGetSiteName($ComputerName)
 
-		Write-Output -InputObject ([NetApi32]::DsGetSiteName($ComputerName))
+		if ($AsADSite)
+		{
+			Write-Output -InputObject (Get-ADReplicationSite -Identity $SiteName)
+		}
+		else {
+			Write-Output -InputObject $SiteName
+		}
 	}
 
 	End {
@@ -4582,7 +4600,7 @@ public static class NetApi32
         {
 			if (HResult == 0x00000005)
             {
-				throw new Exception($"ERROR_ACCESS_DENIED : The function could not access the computer {ComputerName}.");
+				throw new Exception(String.Format("ERROR_ACCESS_DENIED : The function could not access the computer {0}.", ComputerName));
             }
             else if (HResult == 0x00000008)
             {
@@ -4594,7 +4612,7 @@ public static class NetApi32
             }
             else if (HResult == 0x000006BA)
             {
-				throw new Exception($"RPC_S_SERVER_UNAVAILABLE : ComputerName {ComputerName} not found.");
+				throw new Exception(String.Format("RPC_S_SERVER_UNAVAILABLE : ComputerName {0} not found.", ComputerName));
             }
             else
             {
