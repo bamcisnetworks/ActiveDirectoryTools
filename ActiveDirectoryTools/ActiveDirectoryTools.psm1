@@ -4467,6 +4467,59 @@ Function Get-ADUserAccountControl {
 	}
 }
 
+Function Get-ADComputerSite {
+	<#
+		.SYNOPSIS
+			Gets the AD Site for the specified computer.
+
+		.DESCRIPTION
+			Calls DsGetSiteName() and retrieves the current Active Directory site for the specified ComputerName. The cmdlet will throw an exception if it cannot
+			contact the specified computer or if the computer is not part of a site.
+
+		.PARAMETER ComputerName
+			The computer to query the AD site name for. Leave this blank to query the local machine.
+
+		.EXAMPLE
+			$Site = Get-ADComputerSite
+
+			Gets the AD site for the local computer. The return value would be Default-First-Site-Name if the computer is in that AD site.
+
+		.EXAMPLE
+			$Site = Get-ADComputerSite -ComputerName myserver01
+
+			Gets the AD site for the remote computer myserver01.
+
+		.INPUTS
+			System.String
+
+		.OUTPUTS
+			System.String
+
+		.NOTES
+			AUTHOR: Michael Haken
+			LAST UPDATE: 8/7/2017
+	#>
+	[CmdletBinding()]
+	[OutputType([System.String])]
+	Param(
+		[Parameter()]
+		[ValidateNotNull()]
+		[System.String]$ComputerName = [System.String]::Empty
+	)
+
+	Begin {
+	}
+
+	Process {
+		Add-Type -TypeDefinition $script:AdSite
+
+		Write-Output -InputObject ([NetApi32]::DsGetSiteName($ComputerName))
+	}
+
+	End {
+	}
+}
+
 $script:UACValues = @(
 			[PSCustomObject]@{Key="0x00000001";Value="ADS_UF_SCRIPT"},
 			[PSCustomObject]@{Key="0x00000002";Value="ADS_UF_ACCOUNT_DISABLE"},
@@ -4492,3 +4545,64 @@ $script:UACValues = @(
 			[PSCustomObject]@{Key="0x02000000";Value="ADS_UF_NO_AUTH_DATA_REQUIRED"},
 			[PSCustomObject]@{Key="0x04000000";Value="ADS_UF_PARTIAL_SECRETS_ACCOUNT"}
 		)
+
+$script:AdSite = @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class NetApi32
+{
+	[DllImport("NetApi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern UInt32 DsGetSiteName([MarshalAs(UnmanagedType.LPWStr)]string ComputerName, out IntPtr SiteNameBuffer);
+
+    [DllImport("NetApi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int NetApiBufferFree(IntPtr Buffer);
+
+    private static void ThrowLastWin32Error()
+    {
+		Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+    }
+
+    public static string DsGetSiteName()
+    {
+		return DsGetSiteName(String.Empty);
+
+        // This only works for the local system
+        // [System.DirectoryServices.ActiveDirectory.ActiveDirectorySite]::GetComputerSite();
+    }
+
+    public static string DsGetSiteName(string ComputerName)
+    {
+		IntPtr SiteNameBuffer = IntPtr.Zero;
+        UInt32 HResult = DsGetSiteName(ComputerName, out SiteNameBuffer);
+        string SiteName = Marshal.PtrToStringAuto(SiteNameBuffer);
+        NetApiBufferFree(SiteNameBuffer);
+
+        if (HResult != 0)
+        {
+			if (HResult == 0x00000005)
+            {
+				throw new Exception($"ERROR_ACCESS_DENIED : The function could not access the computer {ComputerName}.");
+            }
+            else if (HResult == 0x00000008)
+            {
+				throw new Exception("ERROR_NOT_ENOUGH_MEMORY : Not enough memory.");
+            }
+            else if (HResult == 0x0000077F)
+            {
+				throw new Exception("ERROR_NO_SITENAME : The computer is not assigned to a site.");
+            }
+            else if (HResult == 0x000006BA)
+            {
+				throw new Exception($"RPC_S_SERVER_UNAVAILABLE : ComputerName {ComputerName} not found.");
+            }
+            else
+            {
+				ThrowLastWin32Error();
+            }
+        }
+
+        return SiteName;
+    }
+}
+"@
