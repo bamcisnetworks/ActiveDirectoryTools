@@ -1030,21 +1030,24 @@ Function Get-WmiFilter {
 
         [PSObject[]]$WmiFilters = Get-ADObject -Filter $Filter -Properties "msWMI-Author","msWMI-ChangeDate","msWMI-CreationDate","msWMI-ID","msWMI-Name","msWMI-Parm1","msWMI-Parm2","DistinguishedName" -Server $Domain @CredSplat
 
-		if ($IncludeLinkInformation) 
+		if ($WmiFilters -ne $null -and $WmiFilters.Length -gt 0)
 		{
-			$GPOs = Get-ADObject -Filter {objectClass -eq "groupPolicyContainer"} -Properties "gPCWQLFilter","displayName","name" @CredSplat | 
-				Where-Object {![System.String]::IsNullOrEmpty($_.gPCWQLFilter)} | 
-				Select-Object -Property "gPCWQLFilter","displayName","name" 
+			if ($IncludeLinkInformation) 
+			{
+				$GPOs = Get-ADObject -Filter {objectClass -eq "groupPolicyContainer"} -Properties "gPCWQLFilter","displayName","name" @CredSplat | 
+					Where-Object {![System.String]::IsNullOrEmpty($_.gPCWQLFilter)} | 
+					Select-Object -Property "gPCWQLFilter","displayName","name" 
 
-			foreach ($Filter in $WmiFilters) 
-			{			
-				Add-Member -InputObject $Filter -MemberType NoteProperty -Name "LinkInformation" -Value @() -TypeName [System.Management.Automation.PSObject[]] -Force	
+				foreach ($Filter in $WmiFilters) 
+				{			
+					Add-Member -InputObject $Filter -MemberType NoteProperty -Name "LinkInformation" -Value @() -TypeName [System.Management.Automation.PSObject[]] -Force	
 						
-                $Filter.LinkInformation += ($GPOs | Where-Object {$_.gPCWQLFilter.Split(";")[1] -eq $Filter.'msWMI-ID'} | Select-Object "DisplayName","name")
+					$Filter.LinkInformation += ($GPOs | Where-Object {$_.gPCWQLFilter.Split(";")[1] -eq $Filter.'msWMI-ID'} | Select-Object "DisplayName","name")
+				}
 			}
-		}
 
-		Write-Output -InputObject $WmiFilters
+			Write-Output -InputObject $WmiFilters
+		}
 	}
 
 	End {		
@@ -1544,11 +1547,41 @@ select * from win32_software where DisplayName like "%Java%8%" AND VersionMajor 
 
 		foreach ($Domain in $Domains) 
 		{
+			$Counter = 1
 			foreach ($Filter in $Filters)
 			{
-				Write-Verbose -Message "Adding filter $($Filter.Name) with Expression $($Filter.Expression)"
-				$Output += New-GPOWmiFilter -Name $Filter.Name -Description $Filter.Description -Expression $Filter.Expression -Domain $Domain -Namespace $Filter.Namespace -PassThru -WithReplace:$WithReplace @CredSplat
+				$Percent = ($Counter / $Filters.Length) * 100
+				Write-Progress -Activity "Creating WMI Filters in $Domain domain." -PercentComplete $Percent -Status "$([System.Math]::Round($Percent, 2))% Complete: $Counter of $($Filters.Length)"
+
+				$ExistingFilter = Get-WmiFilter -Name $Filter.Name
+				$Queries = @()
+
+				if ($ExistingFilter -ne $null)
+				{
+					# The msWMI-Parm2 property uses 6 semi-colon properties per filter statement, the first number is the number of statements
+					[System.String[]]$Parts = $ExistingFilter."msWMI-Parm2".Split(";")
+					[System.Int32]$Count = [System.Int32]::Parse($Parts[0])
+
+					for ($i = 1; $i -lt ($Count * 6); $i += 6)
+					{
+						$Queries += $Parts[$i + 5]
+					}
+				}
+
+				if ((Compare-Object -ReferenceObject $Filter.Expression -DifferenceObject $Queries) -ne $null)
+				{
+					Write-Verbose -Message "Adding filter $($Filter.Name) with Expression $($Filter.Expression)"
+					$Output += New-GPOWmiFilter -Name $Filter.Name -Description $Filter.Description -Expression $Filter.Expression -Domain $Domain -Namespace $Filter.Namespace -PassThru -WithReplace:$WithReplace @CredSplat
+				}
+				else
+				{
+					Write-Verbose -Message "The filter $($Filter.Name) already exists with the same expression."
+				}
+
+				$Counter++
 			}
+
+			Write-Progress -Completed -Activity "Creating WMI Filters in $Domain domain."
 		}
 
 		if ($PassThru) 
@@ -4050,7 +4083,7 @@ Function Get-ADPrincipalGroupMembership {
 
             $QueryDomain = $Group.DistinguishedName.Substring($Group.DistinguishedName.IndexOf("DC=")).Replace("DC=", "").Replace(",",".")
 
-			[Microsoft.ActiveDirectory.Management.ADGroup[]]$NewGroups = Get-ADPrincipalGroupMembership -Identity $Group -Server $QueryDomain -ErrorAction SilentlyContinue @CredSplat
+			[Microsoft.ActiveDirectory.Management.ADGroup[]]$NewGroups = Get-ADPrincipalGroupMembership -Identity $Group -Domain $QueryDomain -ErrorAction SilentlyContinue @CredSplat
 
             #If the groups array doesn't have the group yet, add it
             #There may be group memberships where two groups are both members of the same parent group, or there may be
@@ -4412,9 +4445,11 @@ Function Get-ADUserAccountControl {
 	[CmdletBinding()]
 	Param (
 		[Parameter(Mandatory = $true, Position = 0, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Identity,
 
 		[Parameter(Position = 1)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Domain = [System.String]::Empty,
 
 		[Parameter()]
@@ -4538,6 +4573,1786 @@ Function Get-ADComputerSite {
 	}
 }
 
+Function Rename-ADSite {
+	<#
+		.SYNOPSIS
+			Renames the specified Active Directory Site.
+
+		.DESCRIPTION
+			Renames the specified Active Directory Site
+
+		.PARAMETER Name
+			The current identity of the Active Directory site, this defaults to "Default-First-Site-Name".
+
+		.PARAMETER NewName
+			The new name of the Active Directory site.
+
+		.PARAMETER Server
+			The domain controller to target for the operation. If this is not specified, the current domain of the local computer will
+			be used to find a domain controller.
+
+		.INPUTS
+			None
+		
+		.OUTPUTS
+			Microsoft.ActiveDirectory.Management.ADReplicationSite
+
+		.EXAMPLE
+			Rename-ADSite -NewName "Headquarters"
+
+			Renames the Default-First-Site-Name site to Headquarters.
+
+		.NOTES
+			AUTHOR: Michael Haken
+			LAST UPDATE: 10/23/2017
+	#>
+	[CmdletBinding()]
+	[OutputType([Microsoft.ActiveDirectory.Management.ADReplicationSite])]
+    Param (
+		[Parameter(Position=1)]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$Name = "Default-First-Site-Name",
+
+        [Parameter(Position=0, Mandatory=$true)]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$_ -ine $Name
+		})]
+        [System.String]$NewName,
+
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$Server = [System.String]::Empty
+
+    )
+
+    Begin {}
+
+    Process {
+		if ([System.String]::IsNullOrEmpty($Server))
+		{
+			$Server = Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty Domain
+		}
+
+		$Splat = @{}
+		$Splat.Add("Server", $Server)
+
+        $Site = Get-ADReplicationSite -Identity $Name @Splat | Rename-ADObject -NewName $NewName -PassThru @Splat
+		Write-Output -InputObject $Site
+    }
+
+    End {    
+    }
+}
+
+Function Add-ADSiteSubnet {
+	<#
+		.SYNOPSIS
+			Adds a single subnet to an Active Directory site.
+
+		.DESCRIPTION
+			Adds a single subnet to an Active Directory site. If the subnet already exists as a replication subnet, it is assigned to the specified Site, which will remove it from any pre-existing association. If it does not exist, it is added and assigned to the site.
+
+		.PARAMETER SiteSubnet
+			The subnet to add to the site, should be in the form of X.X.X.X/CIDR.
+
+		.PARAMETER SiteName
+			The site the subnet will be added to. This defaults to the current site of the computer the cmdlet is being run on.
+
+		.PARAMETER Server
+			The domain controller to target for the operation. If this is not specified, the current domain of the local computer will
+			be used to find a domain controller.
+
+		.INPUTS
+			None
+		
+		.OUTPUTS
+			Microsoft.ActiveDirectory.Management.ADReplicationSubnet
+
+		.EXAMPLE 
+			Add-ADSiteSubnet -SiteSubnet "192.168.1.0/24" -SiteName "Headquarters"
+
+			The 192.168.1.0/24 subnet is added to the Headquarters site.
+
+		.NOTES
+			AUTHOR: Michael Haken
+			LAST UPDATE: 10/23/2017
+	#>
+	[CmdletBinding()]
+	[OutputType([Microsoft.ActiveDirectory.Management.ADReplicationSubnet])]
+    Param(
+        [Parameter(Mandatory=$true, Position=0)]
+		[ValidateNotNullOrEmpty()]
+        [System.String]$SiteSubnet,
+
+        [Parameter(Position=1)]
+		[ValidateNotNullOrEmpty()]
+        [System.String]$SiteName = [System.String]::Empty,
+
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$Server = [System.String]::Empty
+    )
+
+    Begin {       
+    }
+
+    Process {
+		if ([System.String]::IsNullOrEmpty($Server))
+		{
+			$Server = Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty Domain
+		}
+
+		$Splat = @{}
+		$Splat.Add("Server", $Server)
+
+		if ([System.String]::IsNullOrEmpty($SiteName)) 
+		{
+            $SiteName = Get-ADReplicationSite @Splat | Select-Object -First 1 -ExpandProperty Name
+        }
+
+		try 
+		{
+			$ExistingSubnet = Get-ADReplicationSubnet -Identity $SiteSubnet -ErrorAction SilentlyContinue @Splat
+
+			if ($ExistingSubnet -eq $null) 
+			{
+				$Subnet = New-ADReplicationSubnet -Name $SiteSubnet -Site $SiteName @Splat
+			}
+			else 
+			{
+				$Subnet = Set-ADReplicationSubnet -Identity $ExistingSubnet -Site $SiteName -PassThru @Splat
+			}
+		}
+		catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] 
+		{
+			$Subnet = New-ADReplicationSubnet -Name $SiteSubnet -Site $SiteName @Splat
+		}
+
+		Write-Output -InputObject $Subnet
+    }
+
+    End {      
+    }
+}
+
+Function Get-ADSysvolLocalPath {
+	<#
+		.SYNOPSIS
+			Gets the local path on a domain controller that hosts the SYSVOL.
+
+		.DESCRIPTION
+			This cmdlet connects to a remote domain controller and retrieves the local path the SYSVOL is hosted on.
+		
+			An exception will be thrown is the targetted server is not a domain controller.
+
+		.PARAMETER Server
+			The domain controller to retrieve the SYSVOL path from. If this is not specified, the cmdlet runs against the local machine.
+
+		.PARAMETER Credential
+			The credential to use to remotely connect to the domain controller.
+
+		.PARAMETER Session
+			An active PSSession to use for the remote connection.
+
+		.EXAMPLE
+			Get-ADSysvolLocalPath -Server dc1.contoso.com
+
+			This retrieves the local directory path on dc1 that hosts the SYSVOL.
+
+		.INPUT
+			System.String
+
+		.OUTPUT
+			System.String
+
+		.NOTES
+			AUTHOR: Michael Haken
+			LAST UPDATE: 10/20/2017
+	#>
+	[CmdletBinding()]
+	[OutputType([System.String])]
+	Param(		
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$Server,
+
+        [Parameter()]
+        [ValidateNotNull()]
+        [System.Management.Automation.Credential()]
+        [System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty,
+
+		[Parameter()]
+		[ValidateNotNull()]
+		[System.Management.Automation.Runspaces.PSSession]$Session = $null
+	)
+
+	Begin {
+	}
+
+	Process {
+		$Splat = @{}
+
+		if ([System.String]::IsNullOrEmpty($Server))
+		{
+			$Server = $env:COMPUTERNAME
+		}
+
+		if ($Server.Split(".")[0] -ine $env:COMPUTERNAME)
+		{
+			$Splat.Add("ComputerName", $Server)
+		}
+
+		if ($Session -ne $null)
+		{
+			$Splat.Add("Session", $Session)
+		}
+
+		if ($Credential -ne [System.Management.Automation.PSCredential]::Empty)
+		{
+			$Splat.Add("Credential", $Credential)
+		}
+
+		$Path = Invoke-Command -ScriptBlock {
+            $ProductType = Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty ProductType
+            
+            if ($ProductType -eq 2)
+            {
+			    Write-Output -InputObject (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters" | Select-Object -ExpandProperty SysVol)
+            }
+            else 
+            {
+                throw "The specified server $env:COMPUTERNAME is not a domain controller."
+            }
+		} @Splat
+
+		Write-Output -InputObject $Path
+	}
+
+	End {
+	}
+}
+
+Function Enable-ADRecycleBin {
+	<#
+		.SYNOPSIS
+			Enables the AD recycle bin.
+
+		.DESCRIPTION
+			Enables the AD recycle bin in the specified forest.
+
+		.PARAMETER ForestRootDomainName
+			The name of the forest root domain. This defaults to the forest of the computer the cmdlet is being run on.
+
+		.PARAMETER Server
+			The domain controller to target for the operation. If this is not specified, the current domain of the local computer will
+			be used to find a domain controller.
+
+		.INPUTS
+			System.String
+		
+		.OUTPUTS
+			None
+
+		.EXAMPLE 
+			Enable-ADRecycleBin -ForestRootDomainName "admin.local"
+
+			Enables the AD recycle bin in the admin.local forest.
+
+		.NOTES
+			AUTHOR: Michael Haken
+			LAST UPDATE: 10/23/2017
+	#>
+    [CmdletBinding()]
+    Param(
+        [Parameter(Position=0, ValueFromPipeline=$true)]
+		[ValidateNotNullOrEmpty()]
+        [System.String]$ForestRootDomainName = [System.String]::Empty,
+
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$Server = [System.String]::Empty
+    )
+
+    Begin {        
+    }
+
+    Process {
+		if ([System.String]::IsNullOrEmpty($Server))
+		{
+			$Server = Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty Domain
+		}
+
+		$Splat = @{}
+		$Splat.Add("Server", $Server)
+
+		if ([System.String]::IsNullOrEmpty($ForestRootDomainName)) 
+		{
+            $ForestRootDomainName = Get-ADForest -Current LocalComputer @Splat | Select-Object -ExpandProperty Name
+        }
+		
+		Write-Verbose -Message "Enabling recycle bin in $ForestRootDomainName."
+
+        Enable-ADOptionalFeature -Identity "Recycle Bin Feature" -Scope ForestOrConfigurationSet -Target $ForestRootDomainName -Confirm:$false
+
+		Write-Verbose -Message "AD Recycle Bin successfully enabled."
+    }
+
+    End {		
+    }
+}
+
+Function Enable-ADCentralPolicyStore {
+	<#
+		.SYNOPSIS
+			Creates the Central Policy Store for GPOs in the specified domain.
+
+		.DESCRIPTION
+			Creates the Central Policy Store in the SYSVOL. Then, the cmdlet extracts the ADMX and English ADML files in the specified zip, or uses the local ADMX and English ADML files in the PolicyDefinitions folder, and 
+			moves those to the Central Policy Store.
+
+			This cmdlet can be run directly on a domain controller or it can be executed remotely.
+
+		.PARAMETER FilePath
+			The path to the zip containing the ADMX and ADML files.
+
+		.PARAMETER Domain
+			The domain to create the Central Policy Store for. If this is not specified, it defaults to the current domain of the local computer. The domain name
+			will be used to discover a domain controller.
+
+		.PARAMETER Server
+			The domain controller to run the setup on.
+
+		.PARAMETER Credential
+			Optionally specify a credential to use to connect to the domain controller.
+
+		.INPUTS
+			None
+		
+		.OUTPUTS
+			None
+
+		.EXAMPLE 
+			Enable-ADCentralPolicyStore -Domain contoso.com
+
+			Creates the Central Policy Store for the contoso.com domain. A domain controller in that domain is discovered. The user running the cmdlet
+			needs administrative privileges on the found domain controller.
+
+		.EXAMPLE
+			Enable-ADCentralPolicyStore -Server dc1.tailspintoys.com -Credential (Get-Credential)
+
+			In this example, the cmdlet is being run from a machine in the contoso.com domain. The target server is dc1.tailspintoys.com in the tailspintoys.com domain and
+			sets up the Central Policy Store for the tailspintoys.com domain. Credentials that provide administrative access to dc1 are prompted for when the cmdlet is executed.
+
+		.NOTES
+			AUTHOR: Michael Haken
+			LAST UPDATE: 10/23/2017
+	#>
+	[CmdletBinding(DefaultParameterSetName = "Domain")]
+	[OutputType()]
+    Param (
+		[Parameter(Position=0)]
+		[ValidateNotNullOrEmpty()]
+        [ValidateScript({
+            Test-Path -Path $_
+        })]
+		[System.String]$FilePath = [System.String]::Empty,
+
+		[Parameter(ParameterSetName = "Domain")]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$Domain = [System.String]::Empty,
+
+		[Parameter(ParameterSetName = "Server")]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$Server,
+
+        [Parameter()]
+        [ValidateNotNull()]
+        [System.Management.Automation.Credential()]
+        [System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty
+    )
+
+    Begin {       
+    }
+
+    Process {
+        $CredSplat = @{}
+		$Splat = @{}
+
+        if ($Credential -ne [System.Management.Automation.PSCredential]::Empty)
+        {
+            $CredSplat.Add("Credential", $Credential)
+        }
+
+		# Get the local domain of the computer running the cmdlet in case it is a domain controller
+        $LocalDomain = Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty Domain
+		$Product = Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty ProductType	
+
+		switch ($PSCmdlet.ParameterSetName)
+		{
+			"Domain" {
+				# If the computer running the cmdlet is a domain controller and a different domain wasn't specified
+				# then use the DC directly
+				if ($Product -eq 2 -and [System.String]::IsNullOrEmpty($Domain))
+				{
+					$Server = $env:COMPUTERNAME
+					$Domain = $LocalDomain
+				}
+				else
+				{
+					if ([System.String]::IsNullOrEmpty($Domain))
+					{
+						$Domain = $LocalDomain
+					}
+
+					$Server = Get-ADDomainController -DomainName $Domain -Discover | Select-Object -ExpandProperty Name
+					$Splat.Add("ComputerName", $Server)
+				}
+
+				break
+			}
+			"Server" {
+				$Domain = $LocalDomain
+				$Splat.Add("ComputerName", $Server)
+				break
+			}
+			default {
+				throw "The ParameterSet used $($PSCmdlet.ParameterSetName) was not recognized."
+			}
+		}
+
+        $LocalPath = $FilePath
+
+        # If the targetted server is remote, copy the zip over
+		if ($Server.Split(".")[0] -ine $env:COMPUTERNAME -and -not [System.String]::IsNullOrEmpty($FilePath))
+		{
+			[System.IO.FileInfo]$Info = New-Object -TypeName System.IO.FileInfo($FilePath)
+
+            if (-not (Test-Path -Path "\\$Server\ADMIN$\Temp" @CredSplat))
+            {
+                New-Item -Path "\\$Server\ADMIN$" -Name "Temp" -ItemType Directory @CredSplat | Out-Null
+            }
+
+            $FileName = "$($Info.Name.Substring(0, $Info.Name.LastIndexOf(".")))"
+            $Counter = 1
+            $TempName = $Info.Name
+
+            while (Test-Path -Path "\\$Name\ADMIN$\Temp\$TempName" @CredSplat)
+            {
+                $TempName = "$FileName($Counter)$($Info.Extension)"
+                $Counter++
+            }
+
+            $Destination = "\\$Server\ADMIN$\Temp\$TempName"
+                
+            Write-Verbose -Message "Copying $FilePath to $Destination."
+                    
+            Copy-Item -Path $FilePath -Destination $Destination @CredSplat -Force -Confirm:$false
+                
+            $Sess = New-CimSession -ComputerName $Server @CredSplat
+            $LocalPath = Get-CimInstance Win32_Share -Filter "Name = 'ADMIN$'" -CimSession $Sess | Select-Object -ExpandProperty Path
+            $LocalPath += "\Temp\$TempName"
+            $Sess.Close()           
+            Write-Verbose -Message "Copy complete"    
+		}
+
+        Invoke-Command -ScriptBlock {
+            $SysVol = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters" | Select-Object -ExpandProperty SysVol
+			$Domain = Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty Domain
+
+            $CentralStoreAdmx = "$SysVol\$Domain\Policies\PolicyDefinitions"
+			$CentralStoreAdml = "$SysVol\$Domain\Policies\PolicyDefinitions\en-us"
+
+            if (-not (Test-Path -Path $CentralStoreAdmx))
+            {
+			    New-Item -ItemType Directory -Path $CentralStoreAdmx | Out-Null
+            }
+
+            if (-not (Test-Path -Path $CentralStoreAdml))
+            {
+			    New-Item -ItemType Directory -Path $CentralStoreAdml | Out-Null
+            }
+            
+			[System.String]$ZipPath = $args[0]
+
+            if ([System.String]::IsNullOrEmpty($ZipPath))
+            {
+                $SourceAdmx = "$env:SYSTEMROOT\PolicyDefinitions\*.admx"
+			    $SourceAdml = "$env:SYSTEMROOT\PolicyDefinitions\en-us\*.adml"
+
+			    Copy-Item -Path $SourceAdmx -Destination $CentralStoreAdmx -Force -Confirm:$false
+			    Copy-Item -Path $SourceAdml -Destination $CentralStoreAdml -Force -Confirm:$false
+		    }
+		    else 
+            {
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+				
+				[System.IO.Compression.ZipArchive]$Zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+                foreach ($Item in $Zip.Entries)
+                {
+                    [System.IO.Compression.ZipArchiveEntry]$Item = $Item
+                    $Target = [System.IO.Path]::Combine($CentralStoreAdmx, $Item.FullName)
+
+					# If the destination file doesn't already exist or if the new file has a later Last Write Time, extract it from the zip
+                    if (-not (Test-Path -Path $Target) -or (New-Object -TypeName System.IO.FileInfo($Target)).LastWriteTimeUtc -lt $Item.LastWriteTime.ToUniversalTime().Date)
+                    {
+                        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($Item, $Target, $true)
+                    }
+                }
+                
+                $Zip.Dispose()
+
+                Remove-Item -Path $ZipPath -Force 
+		    }
+
+        } -ArgumentList($LocalPath) @Splat @CredSplat -Verbose
+
+        Write-Verbose -Message "Setup complete."
+    }
+
+    End {		
+    }
+}
+
+Function Enable-MSSGPOSettings {
+	<#
+		.SYNOPSIS
+			Adds the new sceregvl.inf file to enable the MSS settings in Group Policy Management.
+
+		.DESCRIPTION
+			Adds the new sceregvl.inf file to enable the MSS settings in Group Policy Management. The original file is renamed to .old.
+
+		.PARAMETER FilePath
+			The path to the new sceregvl.inf file. If this parameter isn't specified, the default file will be used, which is typically sufficient.
+
+		.INPUTS
+			None or System.String
+		
+		.OUTPUTS
+			None
+
+		.EXAMPLE 
+			Enable-MSSGPOSettings
+
+			Adds the new sceregvl.inf file and enables the management of MSS settings in GPMC.
+
+		.NOTES
+			AUTHOR: Michael Haken
+			LAST UPDATE: 10/23/2017
+	#>
+	[CmdletBinding()]
+	Param(
+		[Parameter(Position=0, ValueFromPipeline=$true)]
+		[ValidateScript({Test-Path -Path $_})]
+		[System.String]$FilePath = [System.String]::Empty
+	)
+
+	Begin{		
+	}
+
+	Process{
+		$TargetFilePath = "$env:SYSTEMROOT\inf\sceregvl.inf"
+		$NewName = "$env:SYSTEMROOT\inf\sceregvl.old"
+
+        [System.String]$UserName = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+        Set-Owner -Path $TargetFilePath -Account $UserName -Force
+
+        [System.Security.Principal.NTAccount]$NTAccount = New-Object -TypeName System.Security.Principal.NTAccount($UserName)
+        [System.Security.Principal.SecurityIdentifier]$Sid = $NTAccount.Translate([System.Security.Principal.SecurityIdentifier])
+
+        $Ace = New-Object System.Security.AccessControl.FileSystemAccessRule($Sid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            [System.Security.AccessControl.InheritanceFlags]::None,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow       
+        )
+
+        Set-TokenPrivilege -Privileges SeSecurityPrivilege -Enable
+
+		$Acl = Get-Acl -Path $TargetFilePath
+		$Acl.AddAccessRule($Ace)
+		Set-Acl -Path $TargetFilePath -AclObject $Acl
+
+        $Counter = 1
+        $Base = "$env:SYSTEMROOT\inf\"
+        $FileName = "sceregvl"
+        $Extension = ".inf"
+
+        $Temp = "$Base$FileName$Extension.old"
+
+        while (Test-Path -Path $Temp)
+        {
+            $Temp = "$Base$FileName($Counter)$Extension.old"
+            $Counter++
+        }
+
+        Rename-Item -Path $TargetFilePath -NewName $Temp -Force
+
+        if ([System.String]::IsNullOrEmpty($FilePath) -or -not (Test-Path -Path $FilePath))
+        {
+            Set-Content -Value $script:sceregvl -Path $TargetFilePath -Force
+        }
+        else
+        {
+            Copy-Item -Path $FilePath -Destination $TargetFilePath -Force
+        }
+		
+        $RegProcess = Start-Process -FilePath "$env:SYSTEMROOT\System32\regsvr32.exe" -ArgumentList @("/s scecli.dll") -NoNewWindow -Wait -PassThru
+
+        if ($RegProcess.ExitCode -eq 0)
+        {
+            Write-Verbose -Message "Successfully registered new sceregvl.inf file."
+        }
+        else
+        {
+            throw "The new sceregvl.inf file failed to register with regsvr32.exe."
+        }
+	}
+
+	End{
+	}
+}
+
+Function Get-ADForestTrust {
+	<#
+		.SYNOPSIS
+			The cmdlet gets the trust relationship information about the local and remote forest.
+
+		.DESCRIPTION
+			The cmdlet gets the trust relationship information about the local and remote forest. If no trust exists, the cmdlet returns null.
+
+		.PARAMETER TargetForestName
+			The name of the remote forest to get the trust information about.
+
+		.PARAMETER CurrentForest
+			The forest object to use to query about the trust information. This defaults to the current forest.
+
+		.INPUTS
+			System.String
+		
+		.OUTPUTS
+			Null or System.DirectoryServices.ActiveDirectory.ForestTrustRelationshipInformation
+
+		.EXAMPLE 
+			Get-ADForestTrust -TargetForestName "contoso.com"
+
+			Gets trust relationship information about contoso.com and the local forest.
+
+		.NOTES
+			AUTHOR: Michael Haken
+			LAST UPDATE: 10/23/2017
+	#>
+    [CmdletBinding()]
+    Param(
+		[Parameter(Position = 0, ValueFromPipeline = $true, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
+        [System.String]$TargetForestName,
+
+		[Parameter(Position = 1)]
+		[ValidateNotNull()]
+        [System.DirectoryServices.ActiveDirectory.Forest]$CurrentForest = $null
+    )
+
+    Begin {		
+	}
+
+    Process {
+		if ($CurrentForest -eq $null) {
+			$CurrentForest = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+		}
+
+		try {
+			Write-Output -InputObject $CurrentForest.GetTrustRelationship($TargetForestName)
+		}
+		catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectNotFoundException] {
+			Write-Warning -Message $_.Exception.Message
+			Write-Output -InputObject $null
+		}
+    }
+
+	End {}
+}
+
+Function Set-ADForestTrustSIDFiltering {
+	<#
+		.SYNOPSIS
+			The cmdlet sets SID filtering between two forests.
+
+		.DESCRIPTION
+			The cmdlet enables or disables SID filtering between two forests with a forest trust.
+
+		.PARAMETER TrustingForest
+			The forest object that trusts the other forest. The trust direction would be outbound or bidirectional for this forest. This defaults to the current forest.
+
+		.PARAMETER TrustedForest
+			The forest that is trusted by the other forest. The trust direction would be inbound or bidirectional for this forest.
+
+		.PARAMETER SidFilteringEnabled
+			Specify whether SID filtering should be enabled. This defaults to true.
+
+		.INPUTS
+			System.String
+		
+		.OUTPUTS
+			None
+
+		.EXAMPLE 
+			Set-ADForestTrustSIDFiltering -TrustedForest "contoso.com" 
+
+			The local forest, admin.local, that trusts contoso.com, has SID filtering enabled on the trust.
+
+		.NOTES
+			AUTHOR: Michael Haken
+			LAST UPDATE: 10/23/2017
+	#>
+	[CmdletBinding()]
+	Param(
+		[Parameter(Position = 0, ValueFromPipeline = $true, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$TrustedForest,
+
+		[Parameter(Position = 1)]
+		[ValidateNotNull()]
+		[System.DirectoryServices.ActiveDirectory.Forest]$TrustingForest = $null,
+
+		[Parameter(Position = 2)]
+		[System.Boolean]$SidFilteringEnabled = $true,
+
+		[Parameter()]
+		[Switch]$EnableLogging
+	)
+
+	Begin {		
+	}
+
+	Process {
+		if ($TrustingForest -eq $null) {
+			$TrustingForest = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+		}
+
+		try {
+			Write-Verbose -Message "Setting SID Filtering for $($TrustingForest.Name) to $SidFilteringEnabled."
+			$TrustingForest.SetSidFilteringStatus($TrustedForest, $SidFilteringEnabled)
+			Write-Verbose -Message "Successfully set SID Filtering to $SidFilteringEnabled."
+		}
+		catch [Exception] {
+			Write-Warning -Message $_.Exception.Message
+		}
+	}
+
+	End {
+	}
+}
+
+Function Set-ADForestTrustKerberosAESEncryption {
+	<#
+		.SYNOPSIS
+			The cmdlet enables Kerberos AES 128 and 256 encryption for a forest trust.
+
+		.DESCRIPTION
+			The cmdlet uses ksetup.exe to enables AES 128 and 256 encryption in the forest specified. 
+	
+			An inbound trust enables encryption in the local forest, outbound in the remote forest, and bidirectional
+			in both forests.
+
+			###################################################################################################
+	
+			On inbound trusts, the remote forest trusts this local forest, so we need to setup the local forest
+		    to issue KDC tickets with AES encryption
+		
+		             Direction Of Trust (Inbound)
+		                    ---------->
+		    RemoteForest.com            LocalForest.com
+		                    <----------
+		             Direction of Access (Outbound)
+           
+            
+            On outbound trusts, this forest trusts the remote forst, so we need to setup the remote forest
+		    to issue KDC tickets with AES encryption
+		
+		             Direction Of Trust (Outbound)
+		                  <---------
+		    RemoteForest.com            LocalForest.com
+		                  ---------->
+		             Direction of Access (Inbound)
+
+			###################################################################################################
+
+            The TrustedForest parameter should be the source of access, so for an INBOUND trust, the LOCAL forest, for an OUTBOUND trust, the REMOTE forest.
+
+            For a BIDIRECTIONAL trust, you should run this cmdlet twice, once for each forest in the trust as the TRUSTED Forest.
+		
+		.PARAMETER TrustingForest
+			The name of the TRUSTING forest (i.e. the source of access of the INBOUND side of the forest trust).
+
+        .PARAMETER TrustedForest
+            The name of the TRUSTED forest (i.e. the target of access of the OUTBOUND side of the forest trust). This is where the command will be executed.
+
+		.PARAMETER IncludeRC4
+			This parameter will include the RC4 encryption algorithm with AES options for compatibility.
+
+		.PARAMETER Server
+			The domain controller to connect to in order to run ksetup. If this is not specified, a DC is discovered in the forest root domain. 
+            The user must have credentials to connect to the server via WinRM and run ksetup.
+			
+		.PARAMETER Credential
+			The credential used to connect to a domain controller in the forest root domain on the TRUSTING forest side.
+
+		.PARAMETER PassThru
+			Returns the new or modified object. By default (i.e. if -PassThru is not specified), this cmdlet does not generate any output.
+	
+		.INPUTS
+			None
+		
+		.OUTPUTS
+			None or Microsoft.ActiveDirectory.Management.ADObject
+
+		.EXAMPLE 
+			Set-ADForestTrustKerberosAESEncryption -TrustingForest "tailspintoys.com" -TrustedForest "contoso.com" -Credential (Get-Credential)
+
+			Prompts the user for credentials for the contoso.com domain. Sets up AES kerberos encryption in the contoso.com domain for the INBOUND forest trust from tailspintoys.com
+
+    	.NOTES
+			AUTHOR: Michael Haken
+			LAST UPDATE: 10/23/2017
+	#>
+	[CmdletBinding(DefaultParameterSetName = "Forest")]
+	Param(
+        [Parameter(Mandatory = $true, Position = 0, ParameterSetName = "Forest")]
+        [ValidateNotNullOrEmpty()]
+        [System.String]$TrustingForest,
+
+        [Parameter(Mandatory = $true, Position = 1)]
+        [ValidateNotNullOrEmpty()]
+        [System.String]$TrustedForest,
+
+		[Parameter()]
+		[Switch]$IncludeRC4,
+
+		[Parameter()]
+		[ValidateNotNull()]
+		[System.Management.Automation.Credential()]
+		[System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty,
+
+		[Parameter(ParameterSetName = "Forest")]
+        [Parameter(Mandatory = $true, Position = 0, ParameterSetName = "Server")]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$Server = [System.String]::Empty,
+
+		[Parameter()]
+		[Switch]$PassThru
+	)
+
+	Begin {		
+	}
+
+	Process {
+        # Get the local domain of the computer running the cmdlet in case it is a domain controller
+        $LocalDomain = Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty Domain
+		$Product = Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty ProductType	
+        
+        [System.Collections.Hashtable]$Splat = @{}
+
+        if ($PSCmdlet.ParameterSetName -eq "Forest")
+        {
+            # If we only specify a forest and no server, find a domain controller
+            if ([System.String]::IsNullOrEmpty($Server))
+            {
+                if (-not ($Product -eq 2 -and $LocalDomain -eq $TrustedForest))
+                {
+                    $Server = Get-ADDomainController -DomainName $TrustingForest -Discover | Select-Object -ExpandProperty Name
+				    $Splat.Add("ComputerName", $Server)
+                }
+                # else, this will run locally
+            }
+            else
+            {
+                # Otherwise, we've specified a server in the forest, so use that explicitly
+                $Splat.Add("ComputerName", $Server)
+            }
+        }
+		else
+        {
+            # Otherwise, we've specified a server in the forest, so use that explicitly
+            $Splat.Add("ComputerName", $Server)
+        }
+
+		if ($Credential -ne [System.Management.Automation.PSCredential]::Empty)
+		{
+			$Splat.Add("Credential", $Credential)
+		}
+
+		[System.Boolean]$RC4 = $IncludeRC4
+        
+        $Trust = Invoke-Command -ScriptBlock {
+			    Import-Module -Name ActiveDirectory
+				$KSetupArgs = @("/setenctypeattr",$args[0],"AES128-CTS-HMAC-SHA1-96","AES256-CTS-HMAC-SHA1-96")
+				[System.Boolean]$IncludeRC4 = $args[1]
+
+				if ($IncludeRC4 -eq $true)
+				{
+					$KSetupArgs += "RC4-HMAC-MD5"
+				}
+
+			    Start-Process -FilePath "$env:SYSTEMROOT\system32\ksetup.exe" -ArgumentList $KSetupArgs -NoNewWindow -Wait
+				[System.String]$Name = $args[0]
+			    Write-Output -InputObject (Get-ADObject -Filter {(objectClass -eq "trustedDomain") -and (name -eq $Name)} -Properties "msDS-SupportedEncryptionTypes") 
+		    } -ArgumentList @($TrustingForest, $RC4) -ErrorVariable Errs @Splat
+
+		if ($Errs -ne $null -and $Errs.Length -gt 0) 
+		{
+			foreach ($Err in $Errs)
+			{
+				Write-Error -ErrorRecord $Err
+			}
+		}
+		else
+		{
+			if ($PassThru) {
+				Write-Output -InputObject $Trust
+			}
+		}
+	}
+
+	End {
+	}
+}
+
+Function Get-ADForestTrustSelectiveAuthentication {
+	[CmdletBinding()]
+	Param(
+		[Parameter(Position = 0, Mandatory = $true, ParameterSetName = "Object")]
+		[ValidateNotNull()]
+		[System.DirectoryServices.ActiveDirectory.Forest]$TrustingForest,
+
+		[Parameter(Position = 0, Mandatory = $true, ParameterSetName = "Name")]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$TrustingForestName,
+
+		[Parameter(Position = 1, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$TrustedForest,
+
+		[Parameter()]
+		[ValidateNotNull()]
+		[System.Management.Automation.Credential()]
+		[System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty
+	)
+
+	Begin {
+
+	}
+
+	Process {
+		if ($PSCmdlet.ParameterSetName -eq "Name")
+		{
+			Write-Verbose -Message "Creating a DirectoryContext from Forest name."
+			if ($Credential -ne [System.Management.Automation.PSCredential]::Empty) {
+				[System.DirectoryServices.ActiveDirectory.DirectoryContext]$TrustingForestContext = New-Object -TypeName System.DirectoryServices.ActiveDirectory.DirectoryContext([System.DirectoryServices.ActiveDirectory.DirectoryContextType]::Forest, $TrustingForestName, $Credential.UserName, (Convert-SecureStringToString -SecureString $Credential.Password))
+			}
+			else {
+				[System.DirectoryServices.ActiveDirectory.DirectoryContext]$TrustingForestContext = New-Object -TypeName System.DirectoryServices.ActiveDirectory.DirectoryContext([System.DirectoryServices.ActiveDirectory.DirectoryContextType]::Forest, $TrustingForestName)
+			}
+
+			Write-Verbose -Message "Creating the forest object."
+			$TrustingForest = [System.DirectoryServices.ActiveDirectory.Forest]::GetForest($TrustingForestContext)
+		}
+
+		Write-Verbose -Message "Getting selective authentication."
+
+		Write-Output -InputObject ($TrustingForest.GetSelectiveAuthenticationStatus($TrustedForest))
+	}
+
+	End {
+	}
+}
+
+Function Set-ADForestTrustSelectiveAuthentication {
+	[CmdletBinding()]
+	Param(
+		[Parameter(Position = 0, Mandatory = $true, ParameterSetName = "Object")]
+		[ValidateNotNull()]
+		[System.DirectoryServices.ActiveDirectory.Forest]$TrustingForest,
+
+		[Parameter(Position = 0, Mandatory = $true, ParameterSetName = "Name")]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$TrustingForestName,
+
+		[Parameter(Position = 1, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$TrustedForest,
+
+		[Parameter(Position = 2)]
+		[System.Boolean]$Enabled = $true,
+
+		[Parameter()]
+		[ValidateNotNull()]
+		[System.Management.Automation.Credential()]
+		[System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty
+	)
+
+	Begin {
+
+	}
+
+	Process {
+		if ($PSCmdlet.ParameterSetName -eq "Name")
+		{
+			Write-Verbose -Message "Creating a DirectoryContext from Forest name."
+			if ($Credential -ne [System.Management.Automation.PSCredential]::Empty) {
+				[System.DirectoryServices.ActiveDirectory.DirectoryContext]$TrustingForestContext = New-Object -TypeName System.DirectoryServices.ActiveDirectory.DirectoryContext([System.DirectoryServices.ActiveDirectory.DirectoryContextType]::Forest, $TrustingForestName, $Credential.UserName, (Convert-SecureStringToString -SecureString $Credential.Password))
+			}
+			else {
+				[System.DirectoryServices.ActiveDirectory.DirectoryContext]$TrustingForestContext = New-Object -TypeName System.DirectoryServices.ActiveDirectory.DirectoryContext([System.DirectoryServices.ActiveDirectory.DirectoryContextType]::Forest, $TrustingForestName)
+			}
+
+			Write-Verbose -Message "Creating the forest object."
+			$TrustingForest = [System.DirectoryServices.ActiveDirectory.Forest]::GetForest($TrustingForestContext)
+		}
+
+		Write-Verbose -Message "Setting selective authentication."
+
+		$TrustingForest.SetSelectiveAuthenticationStatus($TrustedForest, $Enabled)
+
+		Write-Verbose -Message "Completed setting selective authentication."
+	}
+
+	End {
+
+	}
+}
+
+Function New-ADForestTrust {
+	<#
+		.SYNOPSIS
+			The cmdlet builds a forest trust between two forests.
+
+		.DESCRIPTION
+			The cmdlet creates a forest trust between two forests and configures settings associated with the trust. The command will remove existing trust objects with the same name if they are discovered. Because the 
+			Microsoft function for trusts only checks the NetBIOS name when it checks for existence, a trust for another forest could inadvertently be removed. For example, if the local forest is admin.local and the remote 
+			forest has a trust to admin.com, building the trust would fail.
+
+		.PARAMETER LocalForest
+			The name of the local forest where the cmdlet is being run. This defaults to the forest root domain of the computer running the cmdlet.
+
+		.PARAMETER RemoteForest
+			The name of the remote forest where the trust will connect.
+
+		.PARAMETER TrustDirection
+			The direction of the forest trust in relation to the server the cmdlet is being run on. This can be Inbound, Outbound, or Bidirectional.
+
+		.PARAMETER LocalForestCredential
+			The credential to use to setup the local side of the trust. The credential should have Enterprise Admin rights and defaults to the user running the cmdlet.
+
+        .PARAMETER ForestTrustPassword
+            The password that will be specified on both sides of the trust if the trust is being created one side at a time. If this is not specified and a remote credential
+            is not specified, a new random password will be created and returned to the pipeline.
+
+		.PARAMETER RemoteForestCredential
+			The credential to use to setup the remote side of the trust. The credential should have Enterprise Admin rights in the remote forest.
+
+            If these credentials are not specified, only half of the trust will be setup (the local forest side) and you will need to create the rest of the trust in
+            the other forest. For example, if you were to create an inbound trust for the local forest, you would need to configure an outbound trust in the remote forest separately.
+
+		.PARAMETER EnableSelectiveAuthentication
+			Specify whether selective authentication is enabled for the trusting forest. In the case of a bidirectional trust, this is both forests.
+
+            For an inbound or bidirectional trust, this parameter requires RemoteForestCredentials.
+
+		.PARAMETER SidFilteringEnabled
+			Specify whether SID filtering is enabled for the trusting forest. In the case of a bidirectional trust, this is both forests.
+
+            For an inbound or bidirectional trust, this parameter requires RemoteForestCredentials.
+
+		.PARAMETER CreateLocalConditionalForwarder
+			Specifies whether to create a DNS conditional forwarder in the local forest in order to resolve the remote forest DNS name.
+
+		.PARAMETER RemoteForestMasterServers
+			The IP addresses of the remote forest DNS servers that the local conditional forwarder will point to. This is required if the CreateLocalConditionalForwarder is specified.
+
+		.PARAMETER CreateRemoteConditionalForwarder
+			Specifies whether to create a DNS conditional forwarder in the remote forest in order to resolve the local forest DNS name.
+
+		.PARAMETER TrustingDomainSupportsKerberosAESEncryption
+			Specifies whether the trusting domain supports Kerberos AES Encryption. When the trusting domain supports it, it must be configured in the TRUSTED domain so that
+            KDC tickets are passed to the trusting domain using AES encyption. In the case of a bidirectional trust, this specifies that each side of the trust supports AES Encryption.
+
+            For an outbound or bidirectional trust, this parameter requires RemoteForestCredentials.
+
+		.INPUTS
+			None
+		
+		.OUTPUTS
+			None
+
+		.EXAMPLE 
+			New-ADForestTrust -RemoteForest "contoso.com" -RemoteForestCredential (Get-Credential) -CreateLocalConditionalForwarder -CreateRemoteConditionalForwarder -RemoteForestMasterServers @("192.168.2.1")
+
+			Creates conditional forwarders in both the remote and local forest and establishes an inbound forest trust.
+
+		.NOTES
+			None
+	#>
+	[CmdletBinding()]
+    [OutputType()]
+	Param(
+        [Parameter(Position = 0, Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+		[System.String]$RemoteForest,
+
+        [Parameter(Position = 1, Mandatory = $true)]
+        [ValidateNotNull()]
+		[System.DirectoryServices.ActiveDirectory.TrustDirection]$TrustDirection,
+
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [System.String]$ForestTrustPassword,
+
+        [Parameter()]
+		[ValidateNotNull()]
+        [System.Management.Automation.Credential()]
+		[System.Management.Automation.PSCredential]$RemoteForestCredential = [System.Management.Automation.PSCredential]::Empty,
+
+		[Parameter()]
+        [ValidateNotNullOrEmpty()]
+		[System.String]$LocalForest = [System.String]::Empty,
+
+		[Parameter()]
+		[ValidateNotNull()]
+        [System.Management.Automation.Credential()]
+		[System.Management.Automation.PSCredential]$LocalForestCredential = [System.Management.Automation.PSCredential]::Empty,
+		
+		[Parameter()]
+		[Switch]$EnableSelectiveAuthentication,
+
+		[Parameter()]
+		[Switch]$SidFilteringEnabled,
+
+		[Parameter(ParameterSetName = "Local")]
+		[Switch]$CreateLocalConditionalForwarder = $false,
+
+		[Parameter(ParameterSetName = "Local", Mandatory = $true)]
+		[System.String[]]$RemoteForestMasterServers,
+
+        [Parameter()]
+        [Switch]$CreateRemoteConditionalForwarder = $false,
+
+        [Parameter()]
+        [Switch]$TrustingDomainSupportsKerberosAESEncryption
+	)
+
+	Begin {		
+	}
+
+	Process {
+        if ($CreateRemoteConditionalForwarder -and $RemoteForestCredential -eq [System.Management.Automation.PSCredential]::Empty)
+        {
+            throw (New-Object -TypeName System.Exception("In order to create the remote forest conditional forwarder, you must supply non-empty remote forest credentials."))
+        }
+
+        if ($EnableSelectiveAuthentication -and $RemoteForestCredential -eq [System.Management.Automation.PSCredential]::Empty -and @([System.DirectoryServices.ActiveDirectory.TrustDirection]::Inbound, [System.DirectoryServices.ActiveDirectory.TrustDirection]::Bidirectional) -contains $TrustDirection)
+        {
+            throw (New-Object -TypeName System.Exception("In order to enable selective authentication for an outbound or bidirectional trust, you must supply non-empty remote forest credentials."))
+        }
+
+        if ($SidFilteringEnabled -and $RemoteForestCredential -eq [System.Management.Automation.PSCredential]::Empty -and @([System.DirectoryServices.ActiveDirectory.TrustDirection]::Inbound, [System.DirectoryServices.ActiveDirectory.TrustDirection]::Bidirectional) -contains $TrustDirection)
+        {
+            throw (New-Object -TypeName System.Exception("In order to enable SID filtering for an outbound or bidirectional trust, you must supply non-empty remote forest credentials."))
+        }
+
+        if ($TrustingDomainSupportsKerberosAESEncryption -and $RemoteForestCredential -eq [System.Management.Automation.PSCredential]::Empty -and @([System.DirectoryServices.ActiveDirectory.TrustDirection]::Outbound, [System.DirectoryServices.ActiveDirectory.TrustDirection]::Bidirectional) -contains $TrustDirection)
+        {
+            throw (New-Object -TypeName System.Exception("In order to enable kerberos AES encryption for an inbound or bidirectional trust, you must supply non-empty remote forest credentials."))
+        }
+
+        $ShouldContinue = $true
+
+		if ([System.String]::IsNullOrEmpty($LocalForest)) {
+			$LocalForest = (Get-ADForest -Current LoggedOnUser).RootDomain
+		}
+
+		if ($CreateLocalConditionalForwarder -and $RemoteForestMasterServers.Count -lt 1) {
+			if ($EnableLogging) { Write-Log "The create local conditional forwarder parameter was specified, but no remote master servers were specified." }
+			throw "The create local conditional forwarder was specified, but no remote master servers were specified."
+		}
+
+		if ($LocalForestCredential -ne [System.Management.Automation.PSCredential]::Empty) {
+			[System.DirectoryServices.ActiveDirectory.DirectoryContext]$LocalForestContext = New-Object -TypeName System.DirectoryServices.ActiveDirectory.DirectoryContext([System.DirectoryServices.ActiveDirectory.DirectoryContextType]::Forest, $LocalForest, $LocalForestCredential.UserName, (Convert-SecureStringToString -SecureString $LocalForestCredential.Password))
+		}
+		else {
+            [System.DirectoryServices.ActiveDirectory.DirectoryContext]$LocalForestContext = New-Object -TypeName System.DirectoryServices.ActiveDirectory.DirectoryContext([System.DirectoryServices.ActiveDirectory.DirectoryContextType]::Forest, $LocalForest)
+		}
+
+        [System.DirectoryServices.ActiveDirectory.Forest]$LocalForestObj = [System.DirectoryServices.ActiveDirectory.Forest]::GetForest($LocalForestContext)
+
+        if ($CreateLocalConditionalForwarder)
+        {
+            if (([Microsoft.Management.Infrastructure.CimInstance]$Zone = Get-DnsServerZone -Name $RemoteForest -ErrorAction SilentlyContinue) -eq $null)
+            {
+                Write-Verbose -Message "Remote forest does not have an existing local DNS zone."
+
+                [System.Int32]$Counter = 0
+				while ($true) {
+				    try {
+					    Add-DnsServerConditionalForwarderZone -Name $RemoteForest -MasterServers $RemoteForestMasterServers -ReplicationScope Forest -ComputerName $LocalForestObj.Name
+					    Write-Verbose -Message "Conditional forwarder for $RemoteForest successfully created."
+					    break
+				    }
+				    catch [Exception] {
+					    if ($Counter -gt 10) {
+                            $ShouldContinue = $false
+						    throw $_.Exception
+					    }
+					    else {										
+						    Write-Warning -Message "Failed to create conditional forwarder on attempt $($Counter + 1)."
+						    Write-Warning -Message "$($_.Exception.Message)"
+						    $Counter++
+						    Start-Sleep -Seconds 10
+					    }
+				    }
+			    }
+            }
+            else
+            {
+                Write-Verbose -Message "A DNS $($Zone.ZoneType) for the remote forest already exists, no need to create a conditional forwarder."
+            }
+        }
+
+        if ($RemoteForestCredential -ne [System.Management.Automation.PSCredential]::Empty)
+        {
+            try {
+			    Write-Verbose -Message "Ensuring the remote forest name provided $RemoteForest is actually the forest root."
+			    $RemoteForest = (Get-ADDomain -Identity $RemoteForest -Credential $RemoteForestCredential).Forest
+			    Write-Verbose -Message "Forest root is confirmed as $RemoteForest."
+		    }
+		    catch [Exception] {
+			    Write-Warning -Message "Error getting remote forest root: $($_.Exception.Message)"
+			    $ShouldContinue = $false
+		    }
+        }
+
+        if ($ShouldContinue -and $CreateRemoteConditionalForwarder)
+        {
+            if ($RemoteForestCredential -ne [System.Management.Automation.PSCredential]::Empty)
+            {
+                Write-Verbose -Message "Beginning remote forest conditional forwarder setup to $($LocalForestObj.Name)."
+                Write-Verbose -Message "Querying LDAP servers in the remote forest."
+            
+                # The server NameTarget property is an FQDN
+                [System.String[]]$Servers = Resolve-DnsName -Name "_ldap._tcp.dc._msdcs.$RemoteForest" -Type SRV | Where-Object {$_.Type -eq "SRV"} | Select-Object -ExpandProperty NameTarget 
+            
+                Write-Verbose -Message "Found $([System.String]::Join(",", $Servers)) as LDAP server$(if($Servers.Length -gt 1) { "s" }) in $RemoteForest."
+                [System.String]$RemoteServer = [System.String]::Empty
+
+                foreach ($Server in $Servers)
+                {
+                    Write-Verbose -Message "Testing connectivity to $Server"
+
+                    if (Test-Connection -ComputerName $Server -Count 1 -Quiet)
+                    {
+                        Write-Verbose -Message "Successfully connected to $Server."
+                    
+                        # We'll use this server to connect to in order to setup the conditional forwarder
+                        $RemoteServer = $Servers
+
+                        # Break out of the loop, we don't need to test anymore servers
+                        break
+                    }
+                    else
+                    {
+                        Write-Verbose -Message "Could not connect to $Server."
+                    }
+                }
+
+                if (-not [System.String]::IsNullOrEmpty($RemoteServer))
+                {
+                    # This stage will get the IP addresses of the NS servers in the local forest
+
+                    Write-Verbose -Message "Getting list of master servers in $($LocalForestObj.Name) to create in the remote forest conditional forwarder."
+				    [System.String[]]$LocalMasterServers = @()
+
+                    try
+                    {
+				        Resolve-DnsName -Name $LocalForestObj.Name -Type NS | Where-Object {-not [System.String]::IsNullOrEmpty($_.NameHost)} | Select-Object -ExpandProperty NameHost | ForEach-Object {
+        			        # The NS record returned is
+                            # Name     : admin.local
+                            # Type     : NS
+                            # TTL      : 3600
+                            # Section  : Answer
+                            # NameHost : dc1.admin.local
+                            #
+                            # Resolve the name host to an IP address to include in the remote conditional forwarder
+
+                            try
+                            {
+                                $Name = $_
+                                $LocalMasterServers += (Resolve-DnsName -Name $Name -Type A | Select-Object -ExpandProperty IPAddress)
+                            }
+                            catch [Exception]
+                            {
+                                Write-Verbose -Message "The was an exception resolving $Name : $($_.Exception.Message)"
+                            }
+				        }
+                    }
+                    catch [Exception]
+                    {
+                        Write-Warning -Message "There was an exception resolving the NS records for $($LocalForestObj.Name) : $($_.Exception.Message)"
+                        $ShouldContinue = $false
+                    }
+
+                    # Once the NS server IPs have been identified, connect to the remote server and setup the forwarder
+                    if ($LocalMasterServers.Length -gt 0)
+                    {                                                                                                                                                                                                   
+                        Write-Verbose -Message "The local master server$(if ($LocalMasterServers.Length -gt 1) { "s" }) to be included in the conditional forwarder are $([System.String]::Join(",", $LocalMasterServers))."
+                        Write-Verbose -Message "Connecting to $RemoteServer."
+
+                        [System.Management.Automation.Runspaces.PSSession]$Session = New-PSSession -ComputerName $RemoteServer -Credential $RemoteForestCredential -ErrorAction Stop
+
+                        Write-Verbose -Message "Executing DNS setup on $RemoteServer."
+
+                        [Microsoft.Management.Infrastructure.CimInstance]$Result = Invoke-Command -Session $Session -ScriptBlock {
+					        Import-Module -Name DnsServer
+                        
+                            # Check to see if a zone exists already, if it doesn't, create a conditional forwarder, if it does,
+                            # then update it to use the list of master servers we just
+                            [Microsoft.Management.Infrastructure.CimInstance]$Zone = Get-DnsServerZone -Name $args[0] -ErrorAction SilentlyContinue
+						
+                            if ($Zone -eq $null) 
+                            {
+				                $Zone = Add-DnsServerConditionalForwarderZone -Name $args[0] -MasterServers $args[1] -ReplicationScope Forest -PassThru
+					        }
+					        else 
+                            {
+                                [System.String[]]$Current = $Zone.MasterServers | Select-Object -ExpandProperty IPAddressToString
+                                [System.String[]]$Combined = $Current + $args[1]
+						        switch ($Zone.Type) {
+							        "Forwarder" {                                    
+								        $Zone = Set-DnsServerConditionalForwarderZone -Name $args[0] -MasterServers $Combined -PassThru
+								        break
+							        }
+							        "Stub" {
+								        $Zone = Set-DnsServerStubZone -Name $args[0] -MasterServers $Combined -PassThru
+								        break
+							        }
+							        default {
+								        break
+							        }
+						        }	
+					        }
+
+                            Write-Output -InputObject $Zone
+				        } -ErrorVariable ErrResult -ArgumentList @($LocalForestObj.Name, $LocalMasterServers)
+
+					    Remove-PSSession -Session $Session
+
+                        if ($ErrResult -ne $null -and $ErrResult.Count -gt 0) 
+                        {
+						    $ShouldContinue = $false
+                            
+                            Write-Warning -Message "Failed to setup remote forest conditional forwarder."
+
+                            foreach ($Err in $ErrResult)
+                            {
+                                Write-Warning -Message $Err.Exception.Message
+                            }
+					    }
+					    else 
+                        {
+						    Write-Verbose -Message "Successfully created remote forest conditional forwarder.`r`n$($Result | Format-List | Out-String)"
+					    }
+                    }
+                    else
+                    {
+                        Write-Warning -Message "No local master servers could be identified from DNS."
+                        $ShouldContinue = $false
+                    }
+                }
+                else
+                {
+                    Write-Warning -Message "Unable to connect to any remote forest server to perform the conditional forwarder setup."
+                    $ShouldContinue = $false
+                }
+            }
+        }
+
+        if ($ShouldContinue)
+        {
+            $LocalNetbios = $LocalForestObj.Name.Substring(0, $LocalForestObj.Name.IndexOf("."))
+			$RemoteNetbios = $RemoteForest.Substring(0, $RemoteForest.IndexOf("."))
+
+            # Test for the existence of the trust on the local side
+			# Assume trust existsand prove otherwise
+			$LocalExists = $true
+
+            Write-Verbose -Message "Testing for an existing forest trust in the local forest."
+            
+            try
+            {
+                $LocalTrust = Get-ADForestTrust -TargetForestName $RemoteNetbios -CurrentForest $LocalForestObj
+
+                if ($LocalTrust -eq $null) {
+					$LocalExists = $false
+                    Write-Verbose -Message "Local forest trust for $RemoteNetbios does not exist."
+				}
+                else {
+                    Write-Verbose -Message "Local forest trust for $RemoteNetbios does exist and will be re-created."
+                }
+            }
+            catch [Exception]
+            {
+                Write-Warning -Message "Exception getting information about existing trust in local forest: $($_.Exception.Message). Assuming it does not exist."
+                $LocalExists = $false
+            }
+
+
+            # In this case, we're only going to setup half of the trust
+            if ($RemoteForestCredential -eq [System.Management.Automation.PSCredential]::Empty)
+            {
+                Write-Verbose -Message "Remote credentials not specified, creating local side of forest trust only."
+
+                [System.Boolean]$SendToPipeline = $false
+                if ([System.String]::IsNullOrEmpty($ForestTrustPassword))
+                {
+                    Write-Verbose -Message "Creating new random password for the fores trust."
+                    $ForestTrustPassword = New-RandomPassword -Length 50 -EnforceComplexity
+                    $SendToPipeline = $true
+                }
+
+                try
+                {
+                    if ($LocalExists)
+                    {
+                        Write-Verbose -Message "Deleting existing local side of trust relationship."
+
+                        try
+                        {
+                            $LocalForestObj.DeleteLocalSideOfTrustRelationship($RemoteNetbios)
+                        }
+                        catch [Exception]
+                        {
+                            throw (New-Object -TypeName System.Exception("Could not delete existing local side of the trust relationship: $($_.Exception.Message)."))
+                        }
+                    }
+
+                    Write-Verbose -Message "Creating local side of trust relationship."
+
+                    $LocalForestObj.CreateLocalSideOfTrustRelationship($RemoteForest, $TrustDirection, $ForestTrustPassword)
+
+                    Write-Verbose -Message "Successfully created the local side of the trust relationship."
+
+                    
+                    # Enable additional trust options
+
+                    # Inbound and Bidirectional
+				    if (@([System.DirectoryServices.ActiveDirectory.TrustDirection]::Bidirectional, [System.DirectoryServices.ActiveDirectory.TrustDirection]::Inbound) -contains $TrustDirection) 
+                    {
+                        # Local forest is trusted by remote forest
+                        # Inbound for Local Forest - Setup AES encryption support
+                        # Outbound for Remote Forest - Setup SID filtering and selective authentication
+
+
+                        # No selective authentication, requires remote forest credentials
+                    
+                        # No SID filtering, requires remote forest credentials
+
+                        if ($TrustingDomainSupportsKerberosAESEncryption)
+                        {
+                            try
+                            {
+                                Write-Verbose -Message "Enabling AES kerberos encryption in the remote forest."
+                                Set-ADForestTrustKerberosAESEncryption -TrustingForest $RemoteForestObj.Name -TrustedForest $LocalForestObj.Name -Credential $RemoteForestCredential
+                                Write-Verbose -Message "Successfully enabled AES kerberos encryption."
+                            }
+                            catch [Exception]
+                            {
+                                Write-Warning -Message "Could not enable AES kerberos encryption in the remote forest: $($_.Exception.Message)."
+                            }
+                        }
+				    }
+				
+                    # Outbound and Bidirectional
+	                if (@([System.DirectoryServices.ActiveDirectory.TrustDirection]::Bidirectional, [System.DirectoryServices.ActiveDirectory.TrustDirection]::Outbound) -contains $TrustDirection) 
+                    {
+                        # Local forest trusts the remote forest
+                        # Outbound for Local Forest - Setup SID filtering and selective authentication
+                        # Outbound for Remote Forest - Setup AES encryption support
+
+                        if ($EnableSelectiveAuthentication)
+                        {
+                            try
+                            {
+                                Write-Verbose -Message "Enabling selective authentication from $($RemoteForestObj.Name) to $($LocalForestObj.Name)."
+                                Set-ADForestTrustSelectiveAuthentication -TrustingForest $LocalForestObj -TrustedForest $RemoveForestObj.Name -Enabled $true -Credential $RemoteForestCredential
+                                Write-Verbose -Message "Successfully enabled selective authentication."
+                            }
+                            catch [Exception]
+                            {
+                                Write-Warning -Message "Could not establish selective authentication from $($RemoteForestObj.Name) to $($LocalForestObj.Name) : $($_.Exception.Message)."
+                            }
+                        }
+
+                        if ($SidFilteringEnabled)
+                        {
+                            try
+                            {
+                                Write-Verbose -Message "Enabling SID filtering on local forest for an outbound trust."
+						        Set-ADForestTrustSIDFiltering -TrustingForest $LocalForestObj -TrustedForest $RemoteForestObj.Name -SidFilteringEnabled $SidFilteringEnabled
+                                Write-Verbose -Message "Successfully enabled SID filtering."
+                            }
+                            catch [Exception]
+                            {
+                                Write-Warning -Message "Could not enable SID filtering on the local forest: $($_.Exception.Message)."
+                            }
+                        }
+
+                        # No AES encryption support, requires remote forest credentials
+				    }
+                    
+                    if ($SendToPipeline)
+                    {
+                        Write-Output -InputObject $ForestTrustPassword
+                    }
+                }
+                catch [Exception]
+                {
+                    throw (New-Object -TypeName System.Exception("Failed to setup the local side of the trust relationship: $($_.Exception.Message)."))
+                }
+            }
+            # We have credentials, so we can setup both sides of the trust
+            else
+            {
+                try {
+				    [System.DirectoryServices.ActiveDirectory.DirectoryContext]$RemoteForestContext = New-Object -TypeName System.DirectoryServices.ActiveDirectory.DirectoryContext([System.DirectoryServices.ActiveDirectory.DirectoryContextType]::Forest, $RemoteForest, $RemoteForestCredential.UserName, (Convert-SecureStringToString -SecureString $RemoteForestCredential.Password))
+				    [System.DirectoryServices.ActiveDirectory.Forest]$RemoteForestObj = [System.DirectoryServices.ActiveDirectory.Forest]::GetForest($RemoteForestContext)
+			    }
+			    catch [Exception] {
+				    throw (New-Object -TypeName System.Exception("Could not create the remote forest ActiveDirectory object : $($_.Exception.Message)"))
+			    }
+
+                # Test for the existence of the trust on the remote side
+			    # Assume trust exists on the far side and prove otherwise
+			    $RemoteExists = $true
+    
+                Write-Verbose -Message "Testing for an existing forest trust in the remote forest."
+            
+                try
+                {
+                    $RemoteTrust = Get-ADForestTrust -TargetForestName $LocalNetbios -CurrentForest $RemoteForestObj
+
+                    if ($RemoteTrust -eq $null) {
+					    $RemoteExists = $false
+                        Write-Verbose -Message "Remote forest trust for $LocalNetbios does not exist."
+				    }
+                    else {
+                        Write-Verbose -Message "Remote forest trust for $LocalNetbios does exist and will be re-created."
+                    }
+                }
+                catch [Exception]
+                {
+                    Write-Warning -Message "Exception getting information about existing trust in remote forest: $($_.Exception.Message). Assuming it does not exist."
+                    $RemoteExists = $false
+                }
+
+                # Pre-existing trust cleanup
+                try
+                {
+                    Write-Verbose -Message "Cleaning up any pre-existing trust relationships."
+                    $Counter = 1
+
+                    while ($true)
+                    {
+                        try
+                        {
+                            # Option 1, A trust already exists on both sides
+                            if ($RemoteExists -and $LocalExists)
+                            {
+                                $LocalForestObj.DeleteTrustRelationship($RemoteForestObj)
+                                Write-Verbose -Message "Successfully deleted trust relationship from both sides."
+                                break
+                            }
+                            # Option 2, trust already exists on remote side
+                            elseif ($RemoteExists)
+                            {
+                                $RemoteForestObj.DeleteLocalSideOfTrustRelationship($LocalForestObj.Name)
+                                Write-Verbose -Message "Successfully deleted trust relationship on local side of the remote forest."
+                                break
+                            }
+                            # Option 3, trust already exists on local side
+                            elseif ($LocalExists)
+                            {
+                                $LocalForestObj.DeleteLocalSideOfTrustRelationship($RemoteForestObj.Name)
+                                Write-Verbose -Message "Successfully deleted trust relationship on local side of the local forest."
+                                break
+                            }
+                            # Option 4, nothing is pre-existing
+                            else
+                            {
+                                # Do nothing, not sides of the trust exist
+                                Write-Verbose -Message "No pre-existing trust relationships on either side of the forest."
+                                break
+                            }
+                        }
+                        catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectNotFoundException] 
+                        {
+					        Write-Warning -Message "The trust object could not be found for deletion : $($_.Exception.Message). Assuming it was deleted before the cmdlet got to it."
+                            break
+				        }
+                        catch [Exception]
+                        {
+                            if ($Counter -gt 60)
+                            {
+                                Write-Warning -Message "Maximum number of deletion attempts exceeded."
+                                throw $_.Exception
+                            }
+                            else
+                            {
+                                Write-Verbose -Message "Failed to delete trust relationship on attempt $Counter with exception : $($_.Exception.Message)."
+                                Start-Sleep -Seconds 1
+                                $Counter++
+                            }
+                        }
+                    }
+                }
+                catch [Exception]
+                {
+                    throw (New-Object -TypeName System.Exception("Could not remove existing trust : $($_.Exception.Message)"))
+                }
+
+                # Build forest trust
+                try
+                {
+                    $LocalForestObj.CreateTrustRelationship($RemoteForestObj, $TrustDirection)
+
+				    Write-Verbose -Message "Trust creation completed, verifying trust."
+                }
+                catch [Exception]
+                {
+                    throw (New-Object -TypeName System.Exception("The trust relationship could not be established: $($_.Exception.Message)."))
+                }
+
+                # Verify forest trust
+                try
+                {
+				    $LocalForestObj.VerifyTrustRelationship($RemoteForestObj, $TrustDirection)
+
+				    Write-Verbose "Trust creation verified."
+                }
+                catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectNotFoundException] 
+                {
+                    throw (New-Object -TypeName System.Exception("The trust relationship could not be verified: $($_.Exception.Message)."))
+                }
+
+                # Enable additional trust options
+
+                # Inbound and Bidirectional
+				if (@([System.DirectoryServices.ActiveDirectory.TrustDirection]::Bidirectional, [System.DirectoryServices.ActiveDirectory.TrustDirection]::Inbound) -contains $TrustDirection) 
+                {
+                    # Local forest is trusted by remote forest
+                    # Inbound for Local Forest - Setup AES encryption support
+                    # Outbound for Remote Forest - Setup SID filtering and selective authentication
+
+
+                    if ($EnableSelectiveAuthentication)
+                    {
+                        try
+                        {
+                            Write-Verbose -Message "Enabling selective authentication from $($LocalForestObj.Name) to $($RemoteForestObj.Name)."
+                            Set-ADForestTrustSelectiveAuthentication -TrustingForest $RemoteForestObj -TrustedForest $LocalForestObj.Name -Enabled $true
+                            Write-Verbose -Message "Successfully enabled selective authentication."
+                        }
+                        catch [Exception]
+                        {
+                            Write-Warning -Message "Could not establish selective authentication from $($RemoteForestObj.Name) to $($LocalForestObj.Name) : $($_.Exception.Message)."
+                        }
+                    }
+                    
+                    if ($SidFilteringEnabled)
+                    {
+                        try
+                        {
+                            Write-Verbose -Message "Enabling SID filtering on remote forest for an inbound trust."
+					        Set-ADForestTrustSIDFiltering -TrustingForest $RemoteForestObj -TrustedForest $LocalForestObj.Name -SidFilteringEnabled $SidFilteringEnabled
+                            Write-Verbose -Message "Successfully enabled SID filtering."
+                        }
+                        catch [Exception]
+                        {
+                            Write-Warning -Message "Could not enable SID filtering on the remtoe forest: $($_.Exception.Message)."
+                        }
+                    }
+
+                    if ($TrustingDomainSupportsKerberosAESEncryption)
+                    {
+                        try
+                        {
+                            Write-Verbose -Message "Enabling AES kerberos encryption in the remote forest."
+                            Set-ADForestTrustKerberosAESEncryption -TrustingForest $RemoteForestObj.Name -TrustedForest $LocalForestObj.Name -Credential $RemoteForestCredential
+                            Write-Verbose -Message "Successfully enabled AES kerberos encryption."
+                        }
+                        catch [Exception]
+                        {
+                            Write-Warning -Message "Could not enable AES kerberos encryption in the remote forest: $($_.Exception.Message)."
+                        }
+                    }
+				}
+				
+                # Outbound and Bidirectional
+	            if (@([System.DirectoryServices.ActiveDirectory.TrustDirection]::Bidirectional, [System.DirectoryServices.ActiveDirectory.TrustDirection]::Outbound) -contains $TrustDirection) 
+                {
+                    # Local forest trusts the remote forest
+                    # Outbound for Local Forest - Setup SID filtering and selective authentication
+                    # Outbound for Remote Forest - Setup AES encryption support
+
+                    if ($EnableSelectiveAuthentication)
+                    {
+                        try
+                        {
+                            Write-Verbose -Message "Enabling selective authentication from $($RemoteForestObj.Name) to $($LocalForestObj.Name)."
+                            Set-ADForestTrustSelectiveAuthentication -TrustingForest $LocalForestObj -TrustedForest $RemoveForestObj.Name -Enabled $true -Credential $RemoteForestCredential
+                            Write-Verbose -Message "Successfully enabled selective authentication."
+                        }
+                        catch [Exception]
+                        {
+                            Write-Warning -Message "Could not establish selective authentication from $($RemoteForestObj.Name) to $($LocalForestObj.Name) : $($_.Exception.Message)."
+                        }
+                    }
+
+                    if ($SidFilteringEnabled)
+                    {
+                        try
+                        {
+                            Write-Verbose -Message "Enabling SID filtering on local forest for an outbound trust."
+						    Set-ADForestTrustSIDFiltering -TrustingForest $LocalForestObj -TrustedForest $RemoteForestObj.Name -SidFilteringEnabled $SidFilteringEnabled
+                            Write-Verbose -Message "Successfully enabled SID filtering."
+                        }
+                        catch [Exception]
+                        {
+                            Write-Warning -Message "Could not enable SID filtering on the local forest: $($_.Exception.Message)."
+                        }
+                    }
+
+                    if ($TrustingDomainSupportsKerberosAESEncryption)
+                    {
+                        try
+                        {
+                            Write-Verbose -Message "Enabling AES kerberos encryption in the local forest."
+                            Set-ADForestTrustKerberosAESEncryption -TrustingForest $LocalForestObj.Name -TrustedForest $RemoteForestObj.Name
+                            Write-Verbose -Message "Successfully enabled AES kerberos encryption."
+                        }
+                        catch [Exception]
+                        {
+                            Write-Warning -Message "Could not enable AES kerberos encryption in the local forest: $($_.Exception.Message)."
+                        }
+                    }
+				}
+            }
+        }
+	}
+
+	End {		
+	}
+}
+
 $script:UACValues = @(
 			[PSCustomObject]@{Key="0x00000001";Value="ADS_UF_SCRIPT"},
 			[PSCustomObject]@{Key="0x00000002";Value="ADS_UF_ACCOUNT_DISABLE"},
@@ -4562,6 +6377,19 @@ $script:UACValues = @(
 			[PSCustomObject]@{Key="0x01000000";Value="ADS_UF_TRUSTED_TO_AUTHENTICATE_FOR_DELEGATION"},
 			[PSCustomObject]@{Key="0x02000000";Value="ADS_UF_NO_AUTH_DATA_REQUIRED"},
 			[PSCustomObject]@{Key="0x04000000";Value="ADS_UF_PARTIAL_SECRETS_ACCOUNT"}
+		)
+
+$script:TrustAttributes = @(
+			[PSCustomObject]@{Key="0x00000001";Value="TRUST_ATTRIBUTE_NON_TRANSITIVE"},
+			[PSCustomObject]@{Key="0x00000002";Value="TRUST_ATTRIBUTE_UPLEVEL_ONLY"},
+			[PSCustomObject]@{Key="0x00000004";Value="TRUST_ATTRIBUTE_QUARANTINED_DOMAIN"},
+			[PSCustomObject]@{Key="0x00000008";Value="TRUST_ATTRIBUTE_FOREST_TRANSITIVE"},
+			[PSCustomObject]@{Key="0x00000010";Value="TRUST_ATTRIBUTE_CROSS_ORGANIZATION"}
+			[PSCustomObject]@{Key="0x00000020";Value="TRUST_ATTRIBUTE_WITHIN_FOREST"},
+			[PSCustomObject]@{Key="0x00000040";Value="TRUST_ATTRIBUTE_TREAT_AS_EXTERNAL"},
+			[PSCustomObject]@{Key="0x00000080";Value="TRUST_ATTRIBUTE_USES_RC4_ENCRYPTION"},
+			[PSCustomObject]@{Key="0x00000200";Value="TRUST_ATTRIBUTE_CROSS_ORGANIZATION_NO_TGT_DELEGATION"},
+			[PSCustomObject]@{Key="0x00000400";Value="TRUST_ATTRIBUTE_PIM_TRUST"}
 		)
 
 $script:AdSite = @"
@@ -4623,4 +6451,344 @@ public static class NetApi32
         return SiteName;
     }
 }
+"@
+
+$script:sceregvl = @"
+; Copyright (c) Microsoft Corporation.  All rights reserved.
+;
+; Security Configuration Template for Security Configuration Editor
+;
+; Template Name:        SCERegVl.INF
+; Template Version:     05.00.DR.0000
+;
+; Revision History
+; 0000  -       Original
+
+[version]
+signature="`$CHICAGO$"
+DriverVer=06/21/2006,6.2.9200.16384
+
+[Register Registry Values]
+;
+; Syntax: RegPath,RegType,DisplayName,DisplayType,Options
+; where
+;         RegPath:      Includes the registry keypath and value
+;         RegType:      1 - REG_SZ, 2 - REG_EXPAND_SZ, 3 - REG_BINARY, 4 - REG_DWORD, 7 - REG_MULTI_SZ
+;         Display Name: Is a localizable string defined in the [strings] section
+;         Display type: 0 - boolean, 1 - Number, 2 - String, 3 - Choices, 4 - Multivalued, 5 - Bitmask
+;         Options:      If Displaytype is 3 (Choices) or 5 (Bitmask), then specify the range of values and corresponding display strings
+;                       in value|displaystring format separated by a comma.
+
+
+MACHINE\System\CurrentControlSet\Control\Lsa\AuditBaseObjects,4,%AuditBaseObjects%,0
+MACHINE\System\CurrentControlSet\Control\Lsa\CrashOnAuditFail,4,%CrashOnAuditFail%,0
+MACHINE\System\CurrentControlSet\Control\Lsa\DisableDomainCreds,4,%DisableDomainCreds%,0
+MACHINE\System\CurrentControlSet\Control\Lsa\EveryoneIncludesAnonymous,4,%EveryoneIncludesAnonymous%,0
+MACHINE\System\CurrentControlSet\Control\Lsa\ForceGuest,4,%ForceGuest%,3,0|%Classic%,1|%GuestBased%
+MACHINE\System\CurrentControlSet\Control\Lsa\FullPrivilegeAuditing,3,%FullPrivilegeAuditing%,0
+MACHINE\System\CurrentControlSet\Control\Lsa\LimitBlankPasswordUse,4,%LimitBlankPasswordUse%,0
+MACHINE\System\CurrentControlSet\Control\Lsa\LmCompatibilityLevel,4,%LmCompatibilityLevel%,3,0|%LMCLevel0%,1|%LMCLevel1%,2|%LMCLevel2%,3|%LMCLevel3%,4|%LMCLevel4%,5|%LMCLevel5%
+MACHINE\System\CurrentControlSet\Control\Lsa\MSV1_0\NTLMMinClientSec,4,%NTLMMinClientSec%,5,524288|%NTLMv2Session%,536870912|%NTLM128%
+MACHINE\System\CurrentControlSet\Control\Lsa\MSV1_0\NTLMMinServerSec,4,%NTLMMinServerSec%,5,524288|%NTLMv2Session%,536870912|%NTLM128%
+MACHINE\System\CurrentControlSet\Control\Lsa\NoLMHash,4,%NoLMHash%,0
+MACHINE\System\CurrentControlSet\Control\Lsa\RestrictAnonymous,4,%RestrictAnonymous%,0
+MACHINE\System\CurrentControlSet\Control\Lsa\RestrictAnonymousSAM,4,%RestrictAnonymousSAM%,0
+MACHINE\System\CurrentControlSet\Control\Lsa\SubmitControl,4,%SubmitControl%,0
+MACHINE\System\CurrentControlSet\Control\Lsa\SCENoApplyLegacyAuditPolicy,4,%SCENoApplyLegacyAuditPolicy%,0
+
+MACHINE\System\CurrentControlSet\Control\Print\Providers\LanMan Print Services\Servers\AddPrinterDrivers,4,%AddPrintDrivers%,0
+
+MACHINE\System\CurrentControlSet\Control\SecurePipeServers\Winreg\AllowedPaths\Machine,7,%AllowedPaths%,4
+MACHINE\System\CurrentControlSet\Control\SecurePipeServers\Winreg\AllowedExactPaths\Machine,7,%AllowedExactPaths%,4
+
+MACHINE\System\CurrentControlSet\Control\Session Manager\Kernel\ObCaseInsensitive,4,%ObCaseInsensitive%,0
+MACHINE\System\CurrentControlSet\Control\Session Manager\Memory Management\ClearPageFileAtShutdown,4,%ClearPageFileAtShutdown%,0
+MACHINE\System\CurrentControlSet\Control\Session Manager\ProtectionMode,4,%ProtectionMode%,0
+MACHINE\System\CurrentControlSet\Control\Session Manager\SubSystems\optional,7,%OptionalSubSystems%,4
+
+MACHINE\System\CurrentControlSet\Services\LanManServer\Parameters\EnableSecuritySignature,4,%EnableSMBSignServer%,0
+MACHINE\System\CurrentControlSet\Services\LanManServer\Parameters\RequireSecuritySignature,4,%RequireSMBSignServer%,0
+MACHINE\System\CurrentControlSet\Services\LanManServer\Parameters\EnableForcedLogOff,4,%EnableForcedLogoff%,0
+MACHINE\System\CurrentControlSet\Services\LanManServer\Parameters\AutoDisconnect,4,%AutoDisconnect%,1,%Unit-Minutes%
+MACHINE\System\CurrentControlSet\Services\LanManServer\Parameters\RestrictNullSessAccess,4,%RestrictNullSessAccess%,0
+MACHINE\System\CurrentControlSet\Services\LanManServer\Parameters\NullSessionPipes,7,%NullPipes%,4
+MACHINE\System\CurrentControlSet\Services\LanManServer\Parameters\NullSessionShares,7,%NullShares%,4
+
+MACHINE\System\CurrentControlSet\Services\LanmanWorkstation\Parameters\EnableSecuritySignature,4,%EnableSMBSignRDR%,0
+MACHINE\System\CurrentControlSet\Services\LanmanWorkstation\Parameters\RequireSecuritySignature,4,%RequireSMBSignRDR%,0
+MACHINE\System\CurrentControlSet\Services\LanmanWorkstation\Parameters\EnablePlainTextPassword,4,%EnablePlainTextPassword%,0
+
+MACHINE\System\CurrentControlSet\Services\LDAP\LDAPClientIntegrity,4,%LDAPClientIntegrity%,3,0|%LDAPClient0%,1|%LDAPClient1%,2|%LDAPClient2%
+
+MACHINE\System\CurrentControlSet\Services\Netlogon\Parameters\DisablePasswordChange,4,%DisablePWChange%,0
+MACHINE\System\CurrentControlSet\Services\Netlogon\Parameters\MaximumPasswordAge,4,%MaximumPWAge%,1,%Unit-Days%
+MACHINE\System\CurrentControlSet\Services\Netlogon\Parameters\RefusePasswordChange,4,%RefusePWChange%,0
+MACHINE\System\CurrentControlSet\Services\Netlogon\Parameters\SignSecureChannel,4,%SignSecureChannel%,0
+MACHINE\System\CurrentControlSet\Services\Netlogon\Parameters\SealSecureChannel,4,%SealSecureChannel%,0
+MACHINE\System\CurrentControlSet\Services\Netlogon\Parameters\RequireSignOrSeal,4,%SignOrSeal%,0
+MACHINE\System\CurrentControlSet\Services\Netlogon\Parameters\RequireStrongKey,4,%StrongKey%,0
+
+MACHINE\System\CurrentControlSet\Services\NTDS\Parameters\LDAPServerIntegrity,4,%LDAPServerIntegrity%,3,1|%LDAPServer1%,2|%LDAPServer2%
+
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\DisableCAD,4,%DisableCAD%,0
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\DontDisplayLastUserName,4,%DontDisplayLastUserName%,0
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\DontDisplayLockedUserId,4,%DontDisplayLockedUserId%,3,1|%LockedUserID0%,2|%LockedUserID1%,3|%LockedUserID2%
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\LegalNoticeCaption,1,%LegalNoticeCaption%,2
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\LegalNoticeText,7,%LegalNoticeText%,4
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\ScForceOption,4,%ScForceOption%,0
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\ShutdownWithoutLogon,4,%ShutdownWithoutLogon%,0
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\UndockWithoutLogon,4,%UndockWithoutLogon%,0
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\NoConnectedUser,4,%BlockConnectedUser%,3,0|%PolicyDisabled%,1|%BlockAdd%,3|%BlockLogin%
+
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Setup\RecoveryConsole\SecurityLevel,4,%RCAdmin%,0
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Setup\RecoveryConsole\SetCommand,4,%RCSet%,0
+
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\CachedLogonsCount,1,%CachedLogonsCount%,1,%Unit-Logons%
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\ForceUnlockLogon,4,%ForceUnlockLogon%,0
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\PasswordExpiryWarning,4,%PasswordExpiryWarning%,1,%Unit-Days%
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\ScRemoveOption,1,%ScRemove%,3,0|%ScRemove0%,1|%ScRemove1%,2|%ScRemove2%,3|%ScRemove3%
+
+MACHINE\Software\Policies\Microsoft\Cryptography\ForceKeyProtection,4,%ForceHighProtection%,3,0|%CryptAllowNoUI%,1|%CryptAllowNoPass%,2|%CryptUsePass%
+MACHINE\Software\Policies\Microsoft\Windows\Safer\CodeIdentifiers\AuthenticodeEnabled,4,%AuthenticodeEnabled%,0
+
+MACHINE\Software\Policies\Microsoft\Windows NT\DCOM\MachineLaunchRestriction,1,%DCOMLaunchRestriction%,2
+MACHINE\Software\Policies\Microsoft\Windows NT\DCOM\MachineAccessRestriction,1,%DCOMAccessRestriction%,2
+
+; delete these values from the UI - Rdr in case NT4 w SCE
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\DisableCAD
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\DontDisplayLastUserName
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\LegalNoticeCaption
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\LegalNoticeText
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\ShutdownWithoutLogon
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\CmdConsSecurityLevel
+MACHINE\System\CurrentControlSet\Control\Print\Providers\LanMan Print Services\AddPrintDrivers
+MACHINE\System\CurrentControlSet\Services\MRxSMB\Parameters\EnableSecuritySignature
+MACHINE\System\CurrentControlSet\Services\MRxSMB\Parameters\RequireSecuritySignature
+MACHINE\System\CurrentControlSet\Services\MRxSMB\Parameters\EnablePlainTextPassword
+MACHINE\System\CurrentControlSet\Services\Rdr\Parameters\EnableSecuritySignature
+MACHINE\System\CurrentControlSet\Services\Rdr\Parameters\RequireSecuritySignature
+MACHINE\System\CurrentControlSet\Services\Rdr\Parameters\EnablePlainTextPassword
+MACHINE\Software\Microsoft\Windows\CurrentVersion\NetCache\EncryptEntireCache
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\EFS\AlgorithmID
+MACHINE\Software\Microsoft\Non-Driver Signing\Policy
+MACHINE\Software\Policies\Microsoft\Cryptography\ForceHighProtection
+
+
+;========= Start of MSS Registry Values =========
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\AutoAdminLogon,1,%DisableAutoLogon%,0
+MACHINE\SYSTEM\CurrentControlSet\Control\CrashControl\AutoReboot,4,%AutoReboot%,0
+MACHINE\System\CurrentControlSet\Services\LanmanServer\Parameters\AutoShareWks,4,%AdminShares%,0
+MACHINE\System\CurrentControlSet\Services\LanmanServer\Parameters\AutoShareServer,4,%AdminSharesServer%,0
+MACHINE\System\CurrentControlSet\Services\Tcpip\Parameters\DisableIPSourceRouting,4,%DisableIPSourceRouting%,3,0|%DisableIPSourceRouting0%,1|%DisableIPSourceRouting1%,2|%DisableIPSourceRouting2%
+MACHINE\SYSTEM\CurrentControlSet\Services\RasMan\Parameters\DisableSavePassword,4,%DisableSavePassword%,0
+MACHINE\System\CurrentControlSet\Services\Tcpip\Parameters\EnableDeadGWDetect,4,%EnableDeadGWDetect%,0
+MACHINE\System\CurrentControlSet\Services\Tcpip\Parameters\EnableICMPRedirect,4,%EnableICMPRedirect%,0
+MACHINE\System\CurrentControlSet\Services\Lanmanserver\Parameters\Hidden,4,%HideFromBrowseList%,0
+MACHINE\System\CurrentControlSet\Services\Tcpip\Parameters\KeepAliveTime,4,%KeepAliveTime%,3,150000|%KeepAliveTime0%,300000|%KeepAliveTime1%,600000|%KeepAliveTime2%,1200000|%KeepAliveTime3%,2400000|%KeepAliveTime4%,3600000|%KeepAliveTime5%,7200000|%KeepAliveTime6%
+MACHINE\System\CurrentControlSet\Services\IPSEC\NoDefaultExempt,4,%NoDefaultExempt%,3,0|%NoDefaultExempt0%,1|%NoDefaultExempt1%,2|%NoDefaultExempt2%,3|%NoDefaultExempt3% 
+MACHINE\System\CurrentControlSet\Services\Netbt\Parameters\NoNameReleaseOnDemand,4,%NoNameReleaseOnDemand%,0
+MACHINE\System\CurrentControlSet\Control\FileSystem\NtfsDisable8dot3NameCreation,4,%NtfsDisable8dot3NameCreation%,3,0|%NtfsDisable8dot3NameCreation0%,1|%NtfsDisable8dot3NameCreation1%,2|%NtfsDisable8dot3NameCreation2%,3|%NtfsDisable8dot3NameCreation3%
+MACHINE\System\CurrentControlSet\Services\Tcpip\Parameters\PerformRouterDiscovery,4,%PerformRouterDiscovery%,0
+MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\SafeDllSearchMode,4,%SafeDllSearchMode%,0
+MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\ScreenSaverGracePeriod,1,%ScreenSaverGracePeriod%,1
+MACHINE\System\CurrentControlSet\Services\Tcpip\Parameters\SynAttackProtect,4,%SynAttackProtect%,3,0|%SynAttackProtect0%,1|%SynAttackProtect1%
+MACHINE\System\CurrentControlSet\Services\Tcpip\Parameters\TcpMaxConnectResponseRetransmissions,4,%TcpMaxConnectResponseRetransmissions%,3,0|%TcpMaxConnectResponseRetransmissions0%,1|%TcpMaxConnectResponseRetransmissions1%,2|%TcpMaxConnectResponseRetransmissions2%,3|%TcpMaxConnectResponseRetransmissions3%
+MACHINE\System\CurrentControlSet\Services\Tcpip\Parameters\TcpMaxDataRetransmissions,4,%TcpMaxDataRetransmissions%,1
+MACHINE\SYSTEM\CurrentControlSet\Services\Eventlog\Security\WarningLevel,4,%WarningLevel%,3,50|%WarningLevel0%,60|%WarningLevel1%,70|%WarningLevel2%,80|%WarningLevel3%,90|%WarningLevel4%
+MACHINE\System\CurrentControlSet\Services\Tcpip6\Parameters\DisableIPSourceRouting,4,%DisableIPSourceRoutingIPv6%,3,0|%DisableIPSourceRouting0%,1|%DisableIPSourceRouting1%,2|%DisableIPSourceRouting2% 
+MACHINE\System\CurrentControlSet\Services\Tcpip6\Parameters\TcpMaxDataRetransmissions ,4,%TcpMaxDataRetransmissionsIPv6%,1
+;========= End of MSS Registry Values =========
+
+
+[Strings]
+;========= Start of MSS Strings Values =========
+DisableAutoLogon = "MSS: (AutoAdminLogon) Enable Automatic Logon (not recommended)" 
+AutoReboot = "MSS: (AutoReboot) Allow Windows to automatically restart after a system crash (recommended except for highly secure environments)"
+AdminShares = "MSS: (AutoShareWks) Enable Administrative Shares (recommended except for highly secure environments)" 
+AdminSharesServer = "MSS: (AutoShareServer) Enable Administrative Shares (recommended except for highly secure environments)" 
+DisableIPSourceRouting = "MSS: (DisableIPSourceRouting) IP source routing protection level (protects against packet spoofing)"
+DisableIPSourceRoutingIPv6 = "MSS: (DisableIPSourceRouting IPv6) IP source routing protection level (protects against packet spoofing)"
+DisableIPSourceRouting0 = "No additional protection, source routed packets are allowed"
+DisableIPSourceRouting1 = "Medium, source routed packets ignored when IP forwarding is enabled"
+DisableIPSourceRouting2 = "Highest protection, source routing is completely disabled"
+DisableSavePassword = "MSS: (DisableSavePassword) Prevent the dial-up passsword from being saved (recommended)"
+EnableDeadGWDetect = "MSS: (EnableDeadGWDetect) Allow automatic detection of dead network gateways (could lead to DoS)"
+EnableICMPRedirect = "MSS: (EnableICMPRedirect) Allow ICMP redirects to override OSPF generated routes"
+HideFromBrowseList = "MSS: (Hidden) Hide Computer From the Browse List (not recommended except for highly secure environments)"
+KeepAliveTime = "MSS: (KeepAliveTime) How often keep-alive packets are sent in milliseconds"
+KeepAliveTime0 ="150000 or 2.5 minutes"
+KeepAliveTime1 ="300000 or 5 minutes (recommended)" 
+KeepAliveTime2 ="600000 or 10 minutes"
+KeepAliveTime3 ="1200000 or 20 minutes"
+KeepAliveTime4 ="2400000 or 40 minutes"
+KeepAliveTime5 ="3600000 or 1 hour"
+KeepAliveTime6 ="7200000 or 2 hours (default value)"
+NoDefaultExempt = "MSS: (NoDefaultExempt) Configure IPSec exemptions for various types of network traffic." 
+NoDefaultExempt0 = "Allow all exemptions (least secure)."
+NoDefaultExempt1 = "Multicast, broadcast, & ISAKMP exempt (best for Windows XP)."
+NoDefaultExempt2 = "RSVP, Kerberos, and ISAKMP are exempt."
+NoDefaultExempt3 = "Only ISAKMP is exempt (recommended for Windows Server 2003)." 
+NoNameReleaseOnDemand = "MSS: (NoNameReleaseOnDemand) Allow the computer to ignore NetBIOS name release requests except from WINS servers"
+NtfsDisable8dot3NameCreation = "MSS: (NtfsDisable8dot3NameCreation) Enable the computer to stop generating 8.3 style filenames"
+NtfsDisable8dot3NameCreation0 = "Enable 8Dot3 Creation on all Volumes"
+NtfsDisable8dot3NameCreation1 = "Disable 8Dot3 Creation on all Volumes"
+NtfsDisable8dot3NameCreation2 = "Set 8dot3 name creation per volume using FSUTIL (Windows 7 or later)
+NtfsDisable8dot3NameCreation3 = "Disable 8Dot3 name creation on all volumes except system volume (Windows 7 or later)"
+PerformRouterDiscovery = "MSS: (PerformRouterDiscovery) Allow IRDP to detect and configure Default Gateway addresses (could lead to DoS)"
+SafeDllSearchMode = "MSS: (SafeDllSearchMode) Enable Safe DLL search mode (recommended)"
+ScreenSaverGracePeriod = "MSS: (ScreenSaverGracePeriod) The time in seconds before the screen saver grace period expires (0 recommended)"
+SynAttackProtect = "MSS: (SynAttackProtect) Syn attack protection level (protects against DoS)"
+SynAttackProtect0 = "No additional protection, use default settings"
+SynAttackProtect1 = "Connections time out sooner if a SYN attack is detected"
+TcpMaxConnectResponseRetransmissions = "MSS: (TcpMaxConnectResponseRetransmissions) SYN-ACK retransmissions when a connection request is not acknowledged"
+TcpMaxConnectResponseRetransmissions0 = "No retransmission, half-open connections dropped after 3 seconds"
+TcpMaxConnectResponseRetransmissions1 = "3 seconds, half-open connections dropped after 9 seconds"
+TcpMaxConnectResponseRetransmissions2 = "3 & 6 seconds, half-open connections dropped after 21 seconds"
+TcpMaxConnectResponseRetransmissions3 = "3, 6, & 9 seconds, half-open connections dropped after 45 seconds"
+TcpMaxDataRetransmissions = "MSS: (TcpMaxDataRetransmissions) How many times unacknowledged data is retransmitted (3 recommended, 5 is default)"
+TcpMaxDataRetransmissionsIPv6 = "MSS: (TcpMaxDataRetransmissions IPv6) How many times unacknowledged data is retransmitted (3 recommended, 5 is default)"
+WarningLevel = "MSS: (WarningLevel) Percentage threshold for the security event log at which the system will generate a warning"
+WarningLevel0 = "50%"
+WarningLevel1 = "60%"
+WarningLevel2 = "70%"
+WarningLevel3 = "80%"
+WarningLevel4 = "90%"
+;========= End of MSS Strings Values =========
+
+;================================ Accounts ============================================================================
+;Specified in UI code - Accounts: Administrator account status
+;Specified in UI code - Accounts: Guest account status
+;Specified in UI code - Accounts: Rename administrator account
+;Specified in UI code - Accounts: Rename guest account
+LimitBlankPasswordUse = "@wsecedit.dll,-59001"
+BlockConnectedUser = "@wsecedit.dll,-59150"
+PolicyDisabled = "@wsecedit.dll,-59151"
+BlockAdd = "@wsecedit.dll,-59152"
+BlockLogin = "@wsecedit.dll,-59153"
+
+;================================ Audit ===============================================================================
+
+AuditBaseObjects="@wsecedit.dll,-59002"
+FullPrivilegeAuditing="@wsecedit.dll,-59003"
+CrashOnAuditFail="@wsecedit.dll,-59004"
+SCENoApplyLegacyAuditPolicy="@wsecedit.dll,-59104"
+
+;================================ Devices =============================================================================
+AddPrintDrivers="@wsecedit.dll,-59005"
+UndockWithoutLogon="@wsecedit.dll,-59010"
+
+;================================ Domain controller ====================================================================
+SubmitControl="@wsecedit.dll,-59011"
+RefusePWChange="@wsecedit.dll,-59012"
+LDAPServerIntegrity = "@wsecedit.dll,-59013"
+LDAPServer1 = "@wsecedit.dll,-59014"
+LDAPServer2 = "@wsecedit.dll,-59015"
+
+;================================ Domain member ========================================================================
+DisablePWChange="@wsecedit.dll,-59016"
+MaximumPWAge="@wsecedit.dll,-59017"
+SignOrSeal="@wsecedit.dll,-59018"
+SealSecureChannel="@wsecedit.dll,-59019"
+SignSecureChannel="@wsecedit.dll,-59020"
+StrongKey="@wsecedit.dll,-59021"
+
+;================================ Interactive logon ====================================================================
+DisableCAD = "@wsecedit.dll,-59022"
+DontDisplayLastUserName = "@wsecedit.dll,-59023"
+DontDisplayLockedUserId = "@wsecedit.dll,-59024"
+LockedUserId0 = "@wsecedit.dll,-59025"
+LockedUserId1 = "@wsecedit.dll,-59026"
+LockedUserId2 = "@wsecedit.dll,-59027"
+LegalNoticeText = "@wsecedit.dll,-59028"
+LegalNoticeCaption = "@wsecedit.dll,-59029"
+CachedLogonsCount = "@wsecedit.dll,-59030"
+PasswordExpiryWarning = "@wsecedit.dll,-59031"
+ForceUnlockLogon = "@wsecedit.dll,-59032"
+ScForceOption = "@wsecedit.dll,-59033"
+ScRemove = "@wsecedit.dll,-59034"
+ScRemove0 = "@wsecedit.dll,-59035"
+ScRemove1 = "@wsecedit.dll,-59036"
+ScRemove2 = "@wsecedit.dll,-59037"
+ScRemove3 = "@wsecedit.dll,-59038"
+
+;================================ Microsoft network client =============================================================
+RequireSMBSignRdr="@wsecedit.dll,-59039"
+EnableSMBSignRdr="@wsecedit.dll,-59040"
+EnablePlainTextPassword="@wsecedit.dll,-59041"
+
+;================================ Microsoft network server =============================================================
+AutoDisconnect="@wsecedit.dll,-59042"
+RequireSMBSignServer="@wsecedit.dll,-59043"
+EnableSMBSignServer="@wsecedit.dll,-59044"
+EnableForcedLogoff="@wsecedit.dll,-59045"
+
+;================================ Network access =======================================================================
+;Specified in UI code - Network access: Allow anonymous SID/Name translation
+DisableDomainCreds = "@wsecedit.dll,-59046"
+RestrictAnonymousSAM = "@wsecedit.dll,-59047"
+RestrictAnonymous = "@wsecedit.dll,-59048"
+EveryoneIncludesAnonymous = "@wsecedit.dll,-59049"
+RestrictNullSessAccess = "@wsecedit.dll,-59050"
+NullPipes = "@wsecedit.dll,-59051"
+NullShares = "@wsecedit.dll,-59052"
+AllowedPaths = "@wsecedit.dll,-59053"
+AllowedExactPaths = "@wsecedit.dll,-59054"
+ForceGuest = "@wsecedit.dll,-59055"
+Classic = "@wsecedit.dll,-59056"
+GuestBased = "@wsecedit.dll,-59057"
+
+;================================ Network security =====================================================================
+;Specified in UI code - Network security: Enforce logon hour restrictions
+NoLMHash = "@wsecedit.dll,-59058"
+LmCompatibilityLevel = "@wsecedit.dll,-59059"
+LMCLevel0 = "@wsecedit.dll,-59060"
+LMCLevel1 = "@wsecedit.dll,-59061"
+LMCLevel2 = "@wsecedit.dll,-59062"
+LMCLevel3 = "@wsecedit.dll,-59063"
+LMCLevel4 = "@wsecedit.dll,-59064"
+LMCLevel5 = "@wsecedit.dll,-59065"
+NTLMMinClientSec = "@wsecedit.dll,-59066"
+NTLMMinServerSec = "@wsecedit.dll,-59067"
+NTLMv2Session = "@wsecedit.dll,-59070"
+NTLM128 = "@wsecedit.dll,-59071"
+LDAPClientIntegrity = "@wsecedit.dll,-59072"
+LDAPClient0 = "@wsecedit.dll,-59073"
+LDAPClient1 = "@wsecedit.dll,-59074"
+LDAPClient2 = "@wsecedit.dll,-59075"
+
+;================================ Recovery console ====================================================================
+RCAdmin="@wsecedit.dll,-59076"
+RCSet="@wsecedit.dll,-59077"
+
+;================================ Shutdown ============================================================================
+ShutdownWithoutLogon="@wsecedit.dll,-59078"
+ClearPageFileAtShutdown="@wsecedit.dll,-59079"
+
+ProtectionMode = "@wsecedit.dll,-59080"
+ObCaseInsensitive = "@wsecedit.dll,-59084"
+
+;================================ System cryptography =================================================================
+FIPS="@wsecedit.dll,-59085"
+
+ForceHighProtection="@wsecedit.dll,-59086"
+
+CryptAllowNoUI="@wsecedit.dll,-59087"
+CryptAllowNoPass="@wsecedit.dll,-59088"
+CryptUsePass="@wsecedit.dll,-59089"
+
+
+;================================ System Settings =====================================================================
+AuthenticodeEnabled = "@wsecedit.dll,-59090"
+OptionalSubSystems = "@wsecedit.dll,-59091"
+
+
+Unit-Logons="@wsecedit.dll,-59092"
+Unit-Days="@wsecedit.dll,-59093"
+Unit-Minutes="@wsecedit.dll,-59094"
+Unit-Seconds="@wsecedit.dll,-59095"
+
+;================================ DCOM Machine Restrictions ===========================================================
+DCOMLaunchRestriction="@wsecedit.dll,-59096"
+DCOMAccessRestriction="@wsecedit.dll,-59097"
+
 "@

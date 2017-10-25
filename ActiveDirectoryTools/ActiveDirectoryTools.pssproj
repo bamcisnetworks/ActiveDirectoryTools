@@ -35,6 +35,9 @@
     <Compile Include="ActiveDirectoryTools.psm1" />
     <Compile Include="ActiveDirectoryTools.tests.ps1" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="sceregvl.inf" />
+  </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <Target Name="Build" />
 </Project>
