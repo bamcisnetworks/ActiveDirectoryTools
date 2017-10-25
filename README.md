@@ -2,6 +2,23 @@
 
 ## Revision History
 
+### 2.0.1.0
+Added dependency to BAMCIS.Common for shared cmdlets.
+
+Added cmdlets:
+		Rename-ADSite
+		Add-ADSiteSubnet
+		Get-ADSysvolLocalPath
+		Enable-ADRecycleBin
+		Enable-ADCentralPolicyStore
+		Enable-MSSGPOSettings
+		Get-ADForestTrust
+		Set-ADForestTrustSIDFiltering
+		Get-ADForestTrustSelectiveAuthentication
+		Set-ADForestTrustSelectiveAuthentication
+		Set-ADForestTrustKerberosAESEncryption
+		New-ADForestTrust
+
 ### 2.0.0.9
 Added the Get-ADComputerSite cmdlet.
 
