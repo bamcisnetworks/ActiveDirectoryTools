@@ -2,8 +2,8 @@
 
 ## Revision History
 
-### 2.0.1.0
-Added dependency to BAMCIS.Common for shared cmdlets.
+### 2.1.0.0
+Added dependency to BAMCIS.Common, BAMCIS.Logging, BAMCIS.TokenManipulation, and BAMCIS.FileIO for shared cmdlets.
 
 Added cmdlets:
 		Rename-ADSite

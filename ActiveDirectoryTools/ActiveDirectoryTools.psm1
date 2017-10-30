@@ -48,16 +48,17 @@ Function Import-WmiFiltersFromJson {
 
 		.NOTES
 			AUTHOR: Michael Haken
-			LAST UPDATE: 1/4/2017
+			LAST UPDATE: 10/30/2017
 	#>
-
+	[CmdletBinding()]
+	[OutputType()]
 	Param (
-		[CmdletBinding()]
 		[Parameter(Position = 0, Mandatory = $true, ValueFromPipeline = $true)]
 		[ValidateScript({ Test-Path -Path $_ })]
 		[System.String]$Path,
 
 		[Parameter(Position = 1)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Domain = [System.String]::Empty,
 
 		[Parameter()]
@@ -69,7 +70,8 @@ Function Import-WmiFiltersFromJson {
 		[System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty,
 
 		[Parameter()]
-        [Microsoft.Management.Infrastructure.CimSession]$CimSession
+		[ValidateNotNull()]
+        [Microsoft.Management.Infrastructure.CimSession]$CimSession = $null
 	)
 
 	Begin {
@@ -77,11 +79,11 @@ Function Import-WmiFiltersFromJson {
 
 	Process
 	{
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		if ($CimSession -eq $null)
@@ -146,7 +148,7 @@ Function Import-WmiFiltersFromJson {
 			{
 				if ($Force)
 				{
-					Write-Host -Object "Replacing $($Attr.'msWMI-Name') WMI Filter"
+					Write-Verbose -Message "Replacing $($Attr.'msWMI-Name') WMI Filter"
 					Remove-ADObject -Identity $Attr.distinguishedname -Confirm:$false -Server $Server @CredSplat				
 					New-ADObject -Name $Attr."msWMI-ID" -Type "msWMI-Som" -Path $WmiPath -OtherAttributes $Attr -Server $Server @CredSplat
 				}
@@ -157,7 +159,7 @@ Function Import-WmiFiltersFromJson {
 			}
 			else
 			{
-				Write-Host -Object "Importing $($Attr.'msWMI-Name') WMI Filter"
+				Write-Verbose -Message "Importing $($Attr.'msWMI-Name') WMI Filter"
 				New-ADObject -Name $Attr."msWMI-ID" -Type "msWMI-Som" -Path $WmiPath -OtherAttributes $Attr -Server $Server @CredSplat
 			}
 		}
@@ -204,12 +206,14 @@ Function Import-GPOPermissionsFromJson {
 			LAST UPDATE: 1/4/2017
 	#>
 	[CmdletBinding()]
+	[OutputType()]
 	Param(
 		[Parameter(Position = 0, ValueFromPipeline = $true, Mandatory = $true)]
 		[ValidateScript({ Test-Path -Path $_ })]
 		[System.String]$Path,
 
 		[Parameter(Position = 1)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Domain = [System.String]::Empty,
 
 		[Parameter()]
@@ -222,11 +226,11 @@ Function Import-GPOPermissionsFromJson {
 	}
 
 	Process {
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		if ([System.String]::IsNullOrEmpty($Domain)) 
@@ -411,11 +415,14 @@ Function Export-GPOBackupsAndWmiFilters {
 			LAST UPDATE: 1/4/2017
 	#>
 	[CmdletBinding()]
+	[OutputType()]
 	Param(
 		[Parameter(Position = 0, ValueFromPipeline = $true, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Path,
 
 		[Parameter(Position = 1)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Domain = [System.String]::Empty,
 
 		[Parameter()]
@@ -429,11 +436,11 @@ Function Export-GPOBackupsAndWmiFilters {
 
 	Process
 	{		
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		if ($Domain -eq [System.String]::Empty)
@@ -539,6 +546,7 @@ Function Export-GPOPermissions {
 			LAST UPDATE: 1/4/2017
 	#>
 	[CmdletBinding(DefaultParameterSetName = "Names")]
+	[OutputType()]
 	Param(
 		[Parameter(Position = 0, ParameterSetName = "Names", Mandatory = $true)]
 		[ValidateScript({$_.Count -gt 0})]
@@ -548,9 +556,11 @@ Function Export-GPOPermissions {
 		[Switch]$All,
 
 		[Parameter(Position = 1, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Destination,
 
 		[Parameter(Position = 2)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Domain = [System.String]::Empty,
 		
 		[Parameter()]
@@ -559,19 +569,18 @@ Function Export-GPOPermissions {
 		[System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty,
 
 		[Parameter()]
-		[Switch]$PassThru
-			
+		[Switch]$PassThru			
 	)
 
 	Begin {
 	}
 
 	Process {
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		if ([System.String]::IsNullOrEmpty($Domain)) 
@@ -721,12 +730,15 @@ Function Import-FullGPOBackups {
 	#>
 
 	[CmdletBinding()]
+	[OutputType()]
 	Param
     (
         [Parameter(Position = 0, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
         [System.String]$Path,
 
         [Parameter(Position = 1)]
+		[ValidateNotNullOrEmpty()]
         [System.String]$Domain = [System.String]::Empty,
 
 		[Parameter(Position = 2)]
@@ -748,7 +760,8 @@ Function Import-FullGPOBackups {
 		[System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty,
 
 		[Parameter()]
-        [Microsoft.Management.Infrastructure.CimSession]$CimSession
+		[ValidateNotNull()]
+        [Microsoft.Management.Infrastructure.CimSession]$CimSession = $null
     )
 
     Begin {
@@ -756,11 +769,11 @@ Function Import-FullGPOBackups {
 
 	Process
 	{
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		if ($CimSession -eq $null)
@@ -966,18 +979,22 @@ Function Get-WmiFilter {
 	#>
 
 	[CmdletBinding(DefaultParameterSetName = "Name")]
+	[OutputType([System.Management.Automation.PSObject[]])]
 	Param(
 		[Parameter(Position = 0, ValueFromPipeline = $true, Mandatory = $true, ParameterSetName = "Guid")]
+		[ValidateNotNull()]
 		[System.Guid]$Guid,
 
 		[Parameter(Position = 0, ValueFromPipeline = $true, Mandatory = $true, ParameterSetName = "Name")]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Name,
+
+		[Parameter(Position = 1)]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$Domain = [System.String]::Empty,
 
 		[Parameter(Mandatory = $true, ParameterSetName = "All")]
 		[Switch]$All,
-
-		[Parameter(Position = 1)]
-		[System.String]$Domain = [System.String]::Empty,
 
 		[Parameter()]
 		[Switch]$IncludeLinkInformation,
@@ -992,11 +1009,11 @@ Function Get-WmiFilter {
 	}
 
 	Process {
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		if ([System.String]::IsNullOrEmpty($Domain)) 
@@ -1105,11 +1122,13 @@ Function New-StandardGPOWmiFilters {
 	#>
 
 	[CmdletBinding(DefaultParameterSetName="SpecifyDomain")]
+	[OutputType([System.Collections.Hashtable[]])]
 	Param(
 		[Parameter(Mandatory = $true, ParameterSetName = "Forest")]
 		[Switch]$AddToForest,
 
 		[Parameter(Position = 0, ParameterSetName = "SpecifyDomain", ValueFromPipeLine = $true)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Domain = [System.String]::Empty,
 
 		[Parameter()]
@@ -1131,11 +1150,11 @@ Function New-StandardGPOWmiFilters {
 	{
 		$Domains = @()
 
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		switch ($PSCmdlet.ParameterSetName) 
@@ -1643,34 +1662,41 @@ Function New-GPOWmiFilter {
 			System.Object
 
 		.OUTPUTS
-			Microsoft.ActiveDirectory.Management.ADObject
+			None or Microsoft.ActiveDirectory.Management.ADObject
 
 		.NOTES
 			AUTHOR: Michael Haken
-			LAST UPDATE: 1/7/2017
+			LAST UPDATE: 10/30/2017
 	#>
 	[CmdletBinding(DefaultParameterSetName="Default")]
+	[OutputType([Microsoft.ActiveDirectory.Management.ADObject])]
 	Param
     (
         [Parameter(Mandatory = $true, Position = 0, ParameterSetName = "Default")]
+		[ValidateNotNullOrEmpty()]
         [System.String]$Name,
 
         [Parameter(Mandatory = $true, Position = 1, ParameterSetName = "Default")]
+		[ValidateNotNull()]
         [System.String[]]$Expression,
 
         [Parameter(Mandatory = $false, Position = 3, ParameterSetName = "Default")]
+		[ValidateNotNullOrEmpty()]
         [System.String]$Description = [System.String]::Empty,
 
         [Parameter(Mandatory = $false, Position = 4, ParameterSetName = "Default")]
+		[ValidateNotNullOrEmpty()]
         [System.String]$Domain = [System.String]::Empty,
 
         [Parameter(Mandatory=$false, Position = 5, ParameterSetName = "Default")]
+		[ValidateNotNullOrEmpty()]
         [System.String]$Author = [System.String]::Empty,
 
 		[Parameter()]
 		[Switch]$WithReplace,
 
 		[Parameter(Mandatory = $true, Position = 0, ValueFromPipeline = $true, ParameterSetName = "InputObject")]
+		[ValidateNotNull()]
 		[System.Object]$InputObject,
 
         [Parameter()]
@@ -1682,39 +1708,18 @@ Function New-GPOWmiFilter {
         [System.Management.Automation.SwitchParameter]$PassThru,
 
 		[Parameter()]
-        [Microsoft.Management.Infrastructure.CimSession]$CimSession
+		[ValidateNotNull()]
+        [Microsoft.Management.Infrastructure.CimSession]$CimSession = $null
     )
 
     DynamicParam 
     {
-        # Set the dynamic parameters' name
-        $ParameterName = "Namespace"
-            
         # Create the dictionary 
         $RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
 
-        # Create the collection of attributes
-        $AttributeCollection = New-Object -TypeName System.Collections.ObjectModel.Collection[System.Attribute]
-            
-        # Create and set the parameters' attributes
-        $ParameterAttribute = New-Object -TypeName System.Management.Automation.ParameterAttribute
-        $ParameterAttribute.Mandatory = $false
-        $ParameterAttribute.Position = 2
-		$ParameterAttribute.ParameterSetName ="Default"
+		$ArraySet = Get-CimInstance -ClassName __Namespace -Namespace "ROOT" | Select-Object -ExpandProperty Name | ForEach-Object {return "ROOT\" + $_} 
+		New-DynamicParameter -Name "Namespace" -Type ([System.String]) -Position 2 -ParameterSets @("Default") -ValidateSet $ArraySet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 
-        # Add the attributes to the attributes collection
-        $AttributeCollection.Add($ParameterAttribute)
-
-        # Generate and set the ValidateSet 
-        $ArraySet = Get-CimInstance -ClassName __Namespace -Namespace "ROOT" | Select-Object -ExpandProperty Name | ForEach-Object {return "ROOT\" + $_} 
-        $ValidateSetAttribute = New-Object -TypeName System.Management.Automation.ValidateSetAttribute($ArraySet)
-
-        # Add the ValidateSet to the attributes collection
-        $AttributeCollection.Add($ValidateSetAttribute)
-
-        # Create and return the dynamic parameter
-        $RuntimeParameter = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameter($ParameterName, [string], $AttributeCollection)
-        $RuntimeParameterDictionary.Add($ParameterName, $RuntimeParameter)
         return $RuntimeParameterDictionary
     }
 
@@ -1723,11 +1728,11 @@ Function New-GPOWmiFilter {
 
     Process
     {		
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		if ($CimSession -eq $null)
@@ -1932,7 +1937,8 @@ Function Set-PDCEmulatorSrvRecords {
 			AUTHOR: Michael Haken
 			LAST UPDATE: 1/7/2017
 	#>
-
+	[CmdletBinding()]
+	[OutputType()]
 	Param
 	(
 		[Parameter(Position = 0)]
@@ -1957,11 +1963,11 @@ Function Set-PDCEmulatorSrvRecords {
 	}
 
 	Process {
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		$Forest = Get-ADForest -Current LoggedOnUser @CredSplat
@@ -1987,7 +1993,7 @@ Function Set-PDCEmulatorSrvRecords {
 
 			if ($RestartServer)
 			{
-				Write-Host -Object "Restarting $PDCEmulator now."
+				Write-Verbose -Object "Restarting $PDCEmulator now."
 				Restart-Computer -ComputerName $PDCEmulator -Wait -Credential @CredSplat
 			}
 			else
@@ -2031,6 +2037,7 @@ Function Start-SDProp {
 	#>
 	
 	[CmdletBinding()]
+	[OutputType()]
 	Param()
 
 	Begin {}
@@ -2092,9 +2099,10 @@ Function Set-SDPropSchedule {
 
 		.NOTES
 			AUTHOR: Michael Haken
-			LAST UPDATE: 1/8/2017
+			LAST UPDATE: 10/30/2017
 	#>
 	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "High")]
+	[OutputType([System.Management.Automation.PSCustomObject])]
 	Param(
 		[Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
 		[ValidateRange(60, 7200)]
@@ -2104,12 +2112,16 @@ Function Set-SDPropSchedule {
 		[Switch]$FindPDCEmulator,
 
 		[Parameter(ParameterSetName = "Find")]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Domain,
 
 		[Parameter()]
 		[ValidateNotNull()]
 		[System.Management.Automation.Credential()]
-		[System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty
+		[System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty,
+
+		[Parameter()]
+		[Switch]$Force
 	)
 
 	Begin {
@@ -2172,24 +2184,27 @@ Function Set-SDPropSchedule {
 	}
 
 	Process {		
-		$Message = "Set frequency to $Seconds"
+
 		$Path = "HKLM:\SYSTEM\CurrentControlSet\Services\NTDS\Parameters"
 		$Key = "AdminSDProtectFrequency"
 
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
-		if ($Seconds -le 3600)
+		$ConfirmMessage = "Set frequency to $Seconds seconds."
+		$WhatIfDescription = "Changed frequency to $Seconds seconds."
+		$ConfirmCaption = "Set SDProp Schedule"
+
+		if ($Seconds -lt 3600)
 		{
-			Write-Warning -Message "Setting the frequency to less than 3600 seconds (1 hour) could have potential LSASS performance ramifications in a large environment, i.e. doing this could cause your DC’s processor to spike to very high sustained levels and drastically hurt you."
-			$Message = "Set frequency to $Seconds, which is less than the recommended value of 3600"
+			$ConfirmMessage = "Setting the frequency to less than 3600 seconds (1 hour) could have potential LSASS performance ramifications in a large environment, i.e. doing this could cause your DC’s processor to spike to very high sustained levels and drastically hurt you."
 		}
-		
-		if ($PSCmdlet.ShouldProcess("$Path - $Key", $Message))
+
+		if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
 		{
 			if ($FindPDCEmulator)
 			{
@@ -2198,9 +2213,9 @@ Function Set-SDPropSchedule {
 					$Domain = $env:USERDOMAIN
 				}
 
-				$PDC = Get-ADDomain -Identity $Domain @CredSplat | Select-Object -ExpandProperty PDCEmulator
+				[System.String]$PDC = Get-ADDomain -Identity $Domain @CredSplat | Select-Object -ExpandProperty PDCEmulator
 				
-				Invoke-Command -ComputerName $PDC -ScriptBlock ${function:Set-Value} -ArgumentList @($Seconds) $CredSplat
+				Invoke-Command -ComputerName $PDC -ScriptBlock ${function:Set-Value} -ArgumentList @($Seconds) @CredSplat
 			}
 			else
 			{
@@ -2275,6 +2290,7 @@ Function Grant-SPNWriteOnProtectedADObjects {
 	#>
 
 	[CmdletBinding()]
+	[OutputType()]
 	Param(
 		[Parameter()]
 		[Switch]$IncludeDomainControllers,
@@ -2290,11 +2306,11 @@ Function Grant-SPNWriteOnProtectedADObjects {
 
 	Process
 	{
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		if (Test-IsEnterpriseAdmin @CredSplat)
@@ -2397,8 +2413,6 @@ Function Set-ADObjectAcl {
 			Type a user name, such as "User01" or "Domain01\User01", or enter a PSCredential object, such as one generated by the Get-Credential cmdlet. If you type a user name, you will be prompted for a password.
 
 		.INPUTS
-			System.String
-
 			System.DirectoryServices.ActiveDirectoryAccessRule[]
 
 		.OUTPUTS
@@ -2406,10 +2420,11 @@ Function Set-ADObjectAcl {
 
 		.NOTES
 			AUTHOR: Michael Haken
-			LAST UPDATE: 1/7/2017
+			LAST UPDATE: 10/30/2017
 	#>
 	
 	[CmdletBinding(DefaultParameterSetName = "DN")]
+	[OutputType()]
     Param 
     (
         [Parameter(Mandatory = $true, Position = 0, ParameterSetName = "CN")]
@@ -2417,12 +2432,15 @@ Function Set-ADObjectAcl {
         [System.String]$ObjectCN,
 
 		[Parameter(Position = 1, ParameterSetName = "CN")]
+		[ValidateNotNullOrEmpty()]
         [System.String]$Domain,
 
-		[Parameter(Position = 0, Mandatory = $true, ParameterSetName = "DN", ValueFromPipeline = $true)]
+		[Parameter(Position = 0, Mandatory = $true, ParameterSetName = "DN")]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$ObjectDN,
 
         [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+		[ValidateNotNull()]
         [System.DirectoryServices.ActiveDirectoryAccessRule[]]$Rules,
 
 		[Parameter()]
@@ -2442,11 +2460,11 @@ Function Set-ADObjectAcl {
 
     Process
     {
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		if ([System.String]::IsNullOrEmpty($Domain))
@@ -2615,11 +2633,14 @@ Function Get-KerberosDelegationInformation {
 	#>
 
 	[CmdletBinding()]
+	[OutputType([System.Management.Automation.PSCustomObject])]
 	Param(
 		[Parameter(Position = 0, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$DelegatedServer,
 
 		[Parameter(Position = 1, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$TargetServer,
 
 		[Parameter()]
@@ -2632,11 +2653,11 @@ Function Get-KerberosDelegationInformation {
 	}
 
 	Process {
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		$Delegation = Get-ADComputer -Identity $DelegatedServer -Properties msDS-AllowedToDelegateTo,UserAccountControl @CredSplat | Select-Object -Property msDS-AllowedToDelegateTo,UserAccountControl
@@ -2702,8 +2723,10 @@ Function Test-IsEnterpriseAdmin {
 	#>
 
 	[CmdletBinding(DefaultParameterSetName="Username")]
+	[OutputType([System.Boolean])]
 	Param (
 		[Parameter(Position = 0, ValueFromPipeLine = $true, ParameterSetName = "Username")]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$UserName = [System.String]::Empty,
 
 		[Parameter(Position = 0, ValueFromPipeLine = $true, ParameterSetName = "Credential")]
@@ -2772,6 +2795,7 @@ Function Test-IsEnterpriseOrDomainAdmin {
 	#>
 
 	[CmdletBinding(DefaultParameterSetName="Username")]
+	[OutputType([System.Boolean])]
     Param
     (
         [Parameter(Position = 0, ValueFromPipeLine = $true, ParameterSetName = "Credential")]
@@ -2780,6 +2804,7 @@ Function Test-IsEnterpriseOrDomainAdmin {
         [System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty,
 
 		[Parameter(Position = 0, ValueFromPipeLine = $true, ParameterSetName = "Username")]
+
 		[System.String]$Username = [System.String]::Empty,
 
 		[Parameter(Position = 1)]
@@ -2848,6 +2873,7 @@ Function Test-IsDomainAdmin {
 	[CmdletBinding(DefaultParameterSetName="Username")]
 	Param (
 		[Parameter(Position = 0, ValueFromPipeLine = $true, ParameterSetName = "Username")]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$UserName = [System.String]::Empty,
 
 		[Parameter(Position = 0, ValueFromPipeLine = $true, ParameterSetName = "Credential")]
@@ -2942,6 +2968,7 @@ Function ConvertTo-ADObject {
 			LAST UPDATE: 1/7/2017
 	#>
     [CmdletBinding()]
+	[OutputType([System.Management.Automation.PSCustomObject])]
     Param(
 		[Parameter(Position = 0, ValueFromPipeLine = $true, Mandatory= $true)]
 		[AllowEmptyString()]
@@ -2960,11 +2987,11 @@ Function ConvertTo-ADObject {
     }
 
     Process {
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
         if ([System.String]::IsNullOrEmpty($Identity))
@@ -3076,11 +3103,13 @@ Function Get-ADGroupMembershipChangeSummary {
 	#>
 
 	[CmdletBinding(DefaultParameterSetName = "default")]
+	[OutputType([System.String], [System.Management.Automation.PSObject])]
 	Param(
 		[Parameter(Position = 0)]
 		[System.Int32]$DaysAgo = 1,
 
 		[Parameter(Position = 1)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Domain = [System.String]::Empty,
 
 		[Parameter(ParameterSetName="Json")]
@@ -3103,11 +3132,11 @@ Function Get-ADGroupMembershipChangeSummary {
 
 	Process
 	{
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		if ($Domain -eq [System.String]::Empty)
@@ -3342,14 +3371,18 @@ Function Get-ADObjectPropertyChangeInfo {
 	#>
 
 	[CmdletBinding()]
+	[OutputType([System.Diagnostics.Eventing.Reader.EventLogRecord[]], [System.Diagnostics.EventLogEntry[]], [System.Management.Automation.PSObject])]
 	Param (
 		[Parameter(Position = 0, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Identity,
 
 		[Parameter(Position = 1, Mandatory=$true)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Property,
 
 		[Parameter(Position = 2)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Domain = [System.String]::Empty,
 
 		[Parameter()]
@@ -3426,7 +3459,7 @@ Function Get-ADObjectPropertyChangeInfo {
 			{
                 if ($GetLog)
 				{
-                    Write-Host -Object "Consider running this as a job, for example: `$Job = Start-Job -ScriptBlock {Get-UserObjectChangedLog -Identity `$args[0] -Property `$args[1] -GetLog} -ArgumentList @(`"$Identity`",`"$Property`")}" -ForegroundColor Yellow
+                    Write-Verbose -Message "Consider running this as a job, for example: `$Job = Start-Job -ScriptBlock {Get-UserObjectChangedLog -Identity `$args[0] -Property `$args[1] -GetLog} -ArgumentList @(`"$Identity`",`"$Property`")}" -ForegroundColor Yellow
 
                     foreach ($Item in $Results)
                     {
@@ -3434,15 +3467,18 @@ Function Get-ADObjectPropertyChangeInfo {
                         $OriginatingTime = $Item.OriginatingTime
                         $Value = $Item.Value
 
-                        Write-Host -Object ""
-                        Write-Host -Object "Originating Server:  $OriginatingServer"
-				        Write-Host -Object "Originating Time:    $OriginatingTime"
-                        Write-Host -Object "Value:               $Value"
-                        Write-Host -Object ""
+						if (-not $PassThru)
+						{
+							Write-Host -Object ""
+							Write-Host -Object "Originating Server:  $OriginatingServer"
+							Write-Host -Object "Originating Time:    $OriginatingTime"
+							Write-Host -Object "Value:               $Value"
+							Write-Host -Object ""
+						}
 
                         if (Test-Connection -ComputerName $Item.OriginatingServer -Count 1)
 					    {
-						    Write-Host -Object "Checking logs on $OriginatingServer for log associated with $Value, this could take awhile..."						   
+						    Write-Verbose -Object "Checking logs on $OriginatingServer for log associated with $Value, this could take awhile..."						   
 
 						    #Event Id 4738 - A User Account Was Changed                          
                             #Event Id 5136 - A directory service object was modified
@@ -3601,19 +3637,23 @@ Function Get-ADGroupMembershipAddInfo {
 			AUTHOR: Michael Haken
 			LAST UPDATE: 1/5/2017
 	#>
-    [Alias("Get-WhenMemberAddedToGroup")]
 	[CmdletBinding(DefaultParameterSetName="Powershell")]
+	[OutputType([System.Management.Automation.PSObject])]
 	Param (
 		[Parameter(Position = 0, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$GroupMember,
 
 		[Parameter(Position = 1, Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Group,
 
 		[Parameter(Position = 2)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$MemberDomain = [System.String]::Empty,
 
 		[Parameter(Position = 3)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$GroupDomain = [System.String]::Empty,
 
 		[Parameter()]
@@ -3639,11 +3679,11 @@ Function Get-ADGroupMembershipAddInfo {
 
 	Process
 	{
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		$ADGroupMemberResult = ConvertTo-ADObject -Identity $GroupMember -Domain $MemberDomain @CredSplat
@@ -3725,15 +3765,18 @@ Function Get-ADGroupMembershipAddInfo {
 
 				if ($Data -ne $null)
 				{
-					Write-Host -Object "Originating Server:  $OriginatingServer"
-					Write-Host -Object "Originating Time:    $OriginatingTime"
+					if (-not $PassThru)
+					{
+						Write-Host -Object "Originating Server:  $OriginatingServer"
+						Write-Host -Object "Originating Time:    $OriginatingTime"
+					}
 
 					if ($GetLog)
 					{
 						if (Test-Connection -ComputerName $OriginatingServer -Count 1 @CredSplat)
 						{
-							Write-Host -Object "Checking logs on $OriginatingServer, this could take awhile..."
-							Write-Host -Object "Consider running this as a job: `$Job = Start-Job -ScriptBlock {Get-WhenMemberAddedToGroup -Group `$args[0] -GroupMember `$args[1]} -ArgumentList `"$Group`",`"$GroupMember`"" -ForegroundColor Yellow
+							Write-Verbose -Object "Checking logs on $OriginatingServer, this could take awhile..."
+							Write-Verbose -Object "Consider running this as a job: `$Job = Start-Job -ScriptBlock {Get-WhenMemberAddedToGroup -Group `$args[0] -GroupMember `$args[1]} -ArgumentList `"$Group`",`"$GroupMember`"" -ForegroundColor Yellow
 
 							# Event Id 4732, 636 - Member added to a domain local group
 							# Event Id 4728, 632 - Member added to a global group
@@ -3861,12 +3904,14 @@ Function Get-ADPrincipalDetails {
 			LAST UPDATE: 1/7/2017
 	#>
 	[CmdletBinding()]
+	[OutputType([System.Management.Automation.PSCustomObject])]
 	Param(
 		[Parameter(Position = 0, ValueFromPipeLine = $true, Mandatory= $true)]
 		[AllowEmptyString()]
 		[System.String]$Identity = [System.String]::Empty,
 
 		[Parameter(Position = 1)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Domain = [System.String]::Empty,
 
 		[Parameter()]
@@ -3879,11 +3924,11 @@ Function Get-ADPrincipalDetails {
 	}
 
 	Process {
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		[System.Boolean]$DomainAdmin = $false
@@ -4016,11 +4061,15 @@ Function Get-ADPrincipalGroupMembership {
 			AUTHOR: Michael Haken
 			LAST UPDATE: 1/7/2017
 	#>
+	[CmdletBinding()]
+	[OutputType([Microsoft.ActiveDirectory.Management.ADGroup[]])]
 	Param(
 		[Parameter(ValueFromPipeline = $true, Position = 0)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Identity,
 
         [Parameter(Position = 1)]
+		[ValidateNotNullOrEmpty()]
         [System.String]$Domain,
 
 		[Parameter()]
@@ -4033,11 +4082,11 @@ Function Get-ADPrincipalGroupMembership {
 	}
 
 	Process {
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		$Result = ConvertTo-ADObject -Identity $Identity -Domain $Domain @CredSplat
@@ -4169,11 +4218,15 @@ Function Get-ADGroupMembers {
 			AUTHOR: Michael Haken
 			LAST UPDATE: 1/7/2017
 	#>
+	[CmdletBinding()]
+	[OutputType([Microsoft.ActiveDirectory.Management.ADObject[]])]
 	Param(
 		[Parameter(ValueFromPipeline = $true, Position = 0)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Identity,
 
         [Parameter(Position = 1)]
+		[ValidateNotNullOrEmpty()]
         [System.String]$Domain,
 
 		[Parameter()]
@@ -4186,11 +4239,11 @@ Function Get-ADGroupMembers {
 	}
 
 	Process {
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		$Result = ConvertTo-ADObject -Identity $Identity -Domain $Domain @CredSplat
@@ -4310,14 +4363,17 @@ Function Get-OldADUsers {
 	#>
 
 	[CmdletBinding()]
+	[OutputType([System.Management.Automation.PSObject[]])]
 	Param(
 		[Parameter(Position = 0, Mandatory = $true, ValueFromPipeLine = $true)]
 		[System.Int32]$DaysOld,
 
 		[Parameter(Position = 1)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$SearchBase = [System.String]::Empty,
 
 		[Parameter(Position = 2)]
+		[ValidateNotNullOrEmpty()]
 		[System.String]$Domain = [System.String]::Empty,
 
 		[Parameter()]
@@ -4331,11 +4387,11 @@ Function Get-OldADUsers {
 
 	Process
 	{
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		$Result = @()
@@ -4439,12 +4495,13 @@ Function Get-ADUserAccountControl {
 
 		.NOTES
 			AUTHOR: Michael Haken
-			LAST UPDATE: 1/7/2017
+			LAST UPDATE: 10/30/2017
 	#>
 
 	[CmdletBinding()]
+	[OutputType([System.Management.Automation.PSCustomObject[]])]
 	Param (
-		[Parameter(Mandatory = $true, Position = 0, ValueFromPipeline = $true, ValueFromPipelineByPropertyName = $true)]
+		[Parameter(Mandatory = $true, Position = 0, ValueFromPipeline = $true)]
 		[ValidateNotNullOrEmpty()]
 		[System.String]$Identity,
 
@@ -4462,11 +4519,11 @@ Function Get-ADUserAccountControl {
 	}
 
 	Process {
-		$CredSplat = @{}
+		[System.Collections.Hashtable]$CredSplat = @{}
 
 		if ($Credential -ne [PSCredential]::Empty)
 		{
-			$CredSplat["Credential"] = $Credential
+			$CredSplat.Add("Credential", $Credential)
 		}
 
 		$Result = ConvertTo-ADObject -Identity $Identity -Domain $Domain @CredSplat
@@ -4626,7 +4683,8 @@ Function Rename-ADSite {
 
     )
 
-    Begin {}
+    Begin {
+	}
 
     Process {
 		if ([System.String]::IsNullOrEmpty($Server))
@@ -4864,8 +4922,9 @@ Function Enable-ADRecycleBin {
 			LAST UPDATE: 10/23/2017
 	#>
     [CmdletBinding()]
+	[OutputType()]
     Param(
-        [Parameter(Position=0, ValueFromPipeline=$true)]
+        [Parameter(Position = 0, ValueFromPipeline = $true)]
 		[ValidateNotNullOrEmpty()]
         [System.String]$ForestRootDomainName = [System.String]::Empty,
 
@@ -5141,9 +5200,12 @@ Function Enable-MSSGPOSettings {
 			LAST UPDATE: 10/23/2017
 	#>
 	[CmdletBinding()]
+	[OutputType()]
 	Param(
-		[Parameter(Position=0, ValueFromPipeline=$true)]
-		[ValidateScript({Test-Path -Path $_})]
+		[Parameter(Position = 0, ValueFromPipeline = $true)]
+		[ValidateScript({
+			Test-Path -Path $_
+		})]
 		[System.String]$FilePath = [System.String]::Empty
 	)
 
@@ -5232,7 +5294,7 @@ Function Get-ADForestTrust {
 			System.String
 		
 		.OUTPUTS
-			Null or System.DirectoryServices.ActiveDirectory.ForestTrustRelationshipInformation
+			System.DirectoryServices.ActiveDirectory.ForestTrustRelationshipInformation
 
 		.EXAMPLE 
 			Get-ADForestTrust -TargetForestName "contoso.com"
@@ -5244,6 +5306,7 @@ Function Get-ADForestTrust {
 			LAST UPDATE: 10/23/2017
 	#>
     [CmdletBinding()]
+	[OutputType([System.DirectoryServices.ActiveDirectory.ForestTrustRelationshipInformation])]
     Param(
 		[Parameter(Position = 0, ValueFromPipeline = $true, Mandatory = $true)]
 		[ValidateNotNullOrEmpty()]
@@ -5307,6 +5370,7 @@ Function Set-ADForestTrustSIDFiltering {
 			LAST UPDATE: 10/23/2017
 	#>
 	[CmdletBinding()]
+	[OutputType()]
 	Param(
 		[Parameter(Position = 0, ValueFromPipeline = $true, Mandatory = $true)]
 		[ValidateNotNullOrEmpty()]
@@ -5317,10 +5381,7 @@ Function Set-ADForestTrustSIDFiltering {
 		[System.DirectoryServices.ActiveDirectory.Forest]$TrustingForest = $null,
 
 		[Parameter(Position = 2)]
-		[System.Boolean]$SidFilteringEnabled = $true,
-
-		[Parameter()]
-		[Switch]$EnableLogging
+		[System.Boolean]$SidFilteringEnabled = $true
 	)
 
 	Begin {		
@@ -5418,6 +5479,7 @@ Function Set-ADForestTrustKerberosAESEncryption {
 			LAST UPDATE: 10/23/2017
 	#>
 	[CmdletBinding(DefaultParameterSetName = "Forest")]
+	[OutputType([Microsoft.ActiveDirectory.Management.ADObject])]
 	Param(
         [Parameter(Mandatory = $true, Position = 0, ParameterSetName = "Forest")]
         [ValidateNotNullOrEmpty()]
@@ -5520,7 +5582,11 @@ Function Set-ADForestTrustKerberosAESEncryption {
 }
 
 Function Get-ADForestTrustSelectiveAuthentication {
+	<#
+
+	#>
 	[CmdletBinding()]
+	[OutputType()]
 	Param(
 		[Parameter(Position = 0, Mandatory = $true, ParameterSetName = "Object")]
 		[ValidateNotNull()]
@@ -5541,7 +5607,6 @@ Function Get-ADForestTrustSelectiveAuthentication {
 	)
 
 	Begin {
-
 	}
 
 	Process {
@@ -5569,7 +5634,11 @@ Function Get-ADForestTrustSelectiveAuthentication {
 }
 
 Function Set-ADForestTrustSelectiveAuthentication {
+	<#
+
+	#>
 	[CmdletBinding()]
+	[OutputType()]
 	Param(
 		[Parameter(Position = 0, Mandatory = $true, ParameterSetName = "Object")]
 		[ValidateNotNull()]
@@ -5593,7 +5662,6 @@ Function Set-ADForestTrustSelectiveAuthentication {
 	)
 
 	Begin {
-
 	}
 
 	Process {
@@ -5692,7 +5760,8 @@ Function New-ADForestTrust {
 			Creates conditional forwarders in both the remote and local forest and establishes an inbound forest trust.
 
 		.NOTES
-			None
+			AUTHOR: Michael Haken
+			LAST UPDATE: 10/27/2017
 	#>
 	[CmdletBinding()]
     [OutputType()]
@@ -5733,6 +5802,7 @@ Function New-ADForestTrust {
 		[Switch]$CreateLocalConditionalForwarder = $false,
 
 		[Parameter(ParameterSetName = "Local", Mandatory = $true)]
+		[ValidateNotNullOrEmpty()]
 		[System.String[]]$RemoteForestMasterServers,
 
         [Parameter()]
@@ -5773,7 +5843,6 @@ Function New-ADForestTrust {
 		}
 
 		if ($CreateLocalConditionalForwarder -and $RemoteForestMasterServers.Count -lt 1) {
-			if ($EnableLogging) { Write-Log "The create local conditional forwarder parameter was specified, but no remote master servers were specified." }
 			throw "The create local conditional forwarder was specified, but no remote master servers were specified."
 		}
 
